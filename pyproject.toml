@@ -1,0 +1,32 @@
+[project]
+name = "soundcloud-player"
+version = "0.1.0"
+description = "A terminal-based application for streaming music from a soundcloud feed"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Alexander Bader", email = "lxbader@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "python-vlc>=3.0.21203",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.4",
+    "textual>=3.5.0",
+]
+
+[project.scripts]
+scplay = "soundcloud_player.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16.1",
+    "ruff>=0.12.0",
+]
