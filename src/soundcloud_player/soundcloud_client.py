@@ -1,6 +1,7 @@
 import json
 import re
 from dataclasses import dataclass
+from typing import Any, Generator
 
 import requests
 
@@ -25,7 +26,7 @@ class Track:
 
 
 class SoundCloudClient:
-    def __init__(self, oauth_token: str):
+    def __init__(self, oauth_token: str) -> None:
         self.base_url = "https://api-v2.soundcloud.com/"
         self.session = requests.session()
         self.session.headers = {
@@ -59,7 +60,7 @@ class SoundCloudClient:
         r.raise_for_status()
         return json.loads(r.text)
 
-    def get_collection(self, path: str, **params):
+    def get_collection(self, path: str, **params) -> Generator[Any]:
         next_url = None
         while True:
             r = self.session.get(
@@ -73,7 +74,7 @@ class SoundCloudClient:
             if not next_url:
                 break
 
-    def get_streamable_link(self, track_id: int):
+    def get_streamable_link(self, track_id: int) -> str:
         track = self.get(f"tracks/{track_id}")
         transcoding = None
         for t in track["media"]["transcodings"]:
@@ -86,36 +87,35 @@ class SoundCloudClient:
         r.raise_for_status()
         return r.json()["url"]
 
-    def get_liked_tracks(self) -> list[Track]:
+    def get_liked_track_ids(self) -> set[int]:
+        return set(self.get_collection("me/track_likes/ids"))
+
+    def get_liked_tracks(self) -> Generator[Track]:
         my_id = self.get("me")["id"]
-        tracks = list(self.get_collection(f"users/{my_id}/likes"))
-        return [
-            Track(
+        for t in self.get_collection(f"users/{my_id}/likes"):
+            if "track" not in t:
+                continue
+            yield Track(
                 id=t["track"]["id"],
                 title=t["track"]["title"],
                 artist=t["track"]["user"]["username"],
             )
-            for t in tracks
-            if "track" in t
-        ]
 
-    def get_liked_track_ids(self) -> set[int]:
-        return set(self.get_collection("me/track_likes/ids"))
-
-    def get_feed(self, max_count: int = 50, min_length_sec: int = 1800) -> list[Track]:
-        filtered_tracks = []
+    def get_feed(self, min_length_sec: int = 1800) -> Generator[Track]:
+        seen = set()
         for i in self.get_collection(
             "stream", activityTypes="TrackPost,TrackRepost,PlaylistPost"
         ):
-            if "track" not in i or i["track"]["duration"] < min_length_sec * 1000:
+            if (
+                "track" not in i
+                or i["track"]["duration"] < min_length_sec * 1000
+                or i["track"]["id"] in seen
+            ):
                 continue
             track = Track(
                 id=i["track"]["id"],
                 title=i["track"]["title"],
                 artist=i["track"]["user"]["username"],
             )
-            if track not in filtered_tracks:
-                filtered_tracks.append(track)
-            if len(filtered_tracks) > max_count:
-                break
-        return filtered_tracks
+            seen.add(track.id)
+            yield track
