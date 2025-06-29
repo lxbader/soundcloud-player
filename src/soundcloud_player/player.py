@@ -5,7 +5,7 @@ import vlc
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Footer, Header, Static
-from vlc import EventType
+# from vlc import EventType
 
 from soundcloud_player.soundcloud_client import SoundCloudClient, Track
 
@@ -62,13 +62,14 @@ class Player(App):
     BINDINGS = [
         ("space", "toggle_play", "Play/Pause"),
         ("s", "shuffle", "Shuffle"),
-        ("a", "alphabetic_sort", "Alphabetic Sort"),
+        ("a", "alphabetic_sort", "A-Z Sort"),
         ("t", "toggle_playlist", "Toggle Likes/Feed"),
-        ("m", "load_more_tracks", "Load 20 Tracks More"),
-        ("left", "previous_track", "Previous Track"),
-        ("right", "next_track", "Next Track"),
-        ("down", "volume_down", "Volume Down"),
-        ("up", "volume_up", "Volume Up"),
+        ("m", "load_more_tracks", "Load More Tracks"),
+        # ("l", "toggle_track_like", "Like/Unlike Track"),
+        ("left", "previous_track", "Previous"),
+        ("right", "next_track", "Next"),
+        ("down", "volume_down", "Vol Down"),
+        ("up", "volume_up", "Vol Up"),
         ("q", "quit", "Quit"),
     ]
 
@@ -97,13 +98,13 @@ class Player(App):
         self.vlc_instance.log_unset()
         self.vlc_player = self.vlc_instance.media_player_new()
         self.vlc_player.audio_set_volume(70)
-        self.event_manager = self.vlc_player.event_manager()
-        self.event_manager.event_attach(
-            EventType.MediaPlayerEndReached,
-            lambda event: self.app.call_from_thread(
-                self.change_track, self.current_idx + 1
-            ),
-        )
+        # self.event_manager = self.vlc_player.event_manager()
+        # self.event_manager.event_attach(
+        #     EventType.MediaPlayerEndReached,
+        #     lambda event: self.app.call_from_thread(
+        #         self.change_track, self.current_idx + 1
+        #     ),
+        # )
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -178,6 +179,16 @@ class Player(App):
 
     def action_load_more_tracks(self) -> None:
         self.expand_current_playlist(count=20)
+
+    # def action_toggle_track_like(self) -> None:
+    #     track_id = self.current_playlist[self.current_idx].id
+    #     if not self.liked_track_ids:
+    #         return
+    #     if track_id in self.liked_track_ids:
+    #         self.sc_client.unlike_track(track_id)
+    #     else:
+    #         self.sc_client.like_track(track_id)
+    #     self.liked_track_ids = self.sc_client.get_liked_track_ids()
 
     def action_next_track(self) -> None:
         self.change_track(self.current_idx + 1)

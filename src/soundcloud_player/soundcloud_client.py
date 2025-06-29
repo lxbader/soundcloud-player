@@ -36,6 +36,7 @@ class SoundCloudClient:
             "Authorization": f"OAuth {oauth_token}",
         }
         self.update_client_id()
+        self.user_id = self.get("me")["id"]
 
     def update_client_id(self) -> None:
         assets_script_regex = re.compile(
@@ -91,8 +92,7 @@ class SoundCloudClient:
         return set(self.get_collection("me/track_likes/ids"))
 
     def get_liked_tracks(self) -> Generator[Track]:
-        my_id = self.get("me")["id"]
-        for t in self.get_collection(f"users/{my_id}/likes"):
+        for t in self.get_collection(f"users/{self.user_id}/likes"):
             if "track" not in t:
                 continue
             yield Track(
@@ -119,3 +119,15 @@ class SoundCloudClient:
             )
             seen.add(track.id)
             yield track
+
+    # def like_track(self, track_id: int):
+    #     r = self.session.put(
+    #         self.base_url + f"users/{self.user_id}/track_likes/{track_id}"
+    #     )
+    #     r.raise_for_status()
+    #
+    # def unlike_track(self, track_id: int):
+    #     r = self.session.delete(
+    #         self.base_url + f"users/{self.user_id}/track_likes/{track_id}"
+    #     )
+    #     r.raise_for_status()

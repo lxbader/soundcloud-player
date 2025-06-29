@@ -1,7 +1,7 @@
 import argparse
 import os
+import sys
 from pathlib import Path
-from sys import platform
 
 import yaml
 
@@ -19,9 +19,9 @@ def create_parser():
 
 class ConfigManager:
     def __init__(self):
-        if platform == "darwin":
+        if sys.platform == "darwin":
             data_root = "~/Library/Application Support"
-        elif platform == "win32":
+        elif sys.platform == "win32":
             data_root = os.getenv("LOCALAPPDATA")
         else:
             raise NotImplementedError("Only Windows and MacOS are supported")
