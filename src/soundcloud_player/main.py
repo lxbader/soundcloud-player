@@ -20,13 +20,13 @@ def create_parser():
 class ConfigManager:
     def __init__(self):
         if sys.platform == "darwin":
-            data_root = "~/Library/Application Support"
+            data_root = Path.home() / "Library"
         elif sys.platform == "win32":
             data_root = os.getenv("LOCALAPPDATA")
         else:
             raise NotImplementedError("Only Windows and MacOS are supported")
         data_dir = Path(data_root) / "scplay"
-        data_dir.mkdir(exist_ok=True)
+        data_dir.mkdir(exist_ok=True, parents=True)
         self.cfg_file = data_dir / "config.yaml"
         if not self.cfg_file.exists():
             self.create()
