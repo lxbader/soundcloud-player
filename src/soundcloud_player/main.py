@@ -10,7 +10,9 @@ from soundcloud_player.soundcloud_client import SoundCloudClient
 
 
 def create_parser():
-    parser = argparse.ArgumentParser(description="Stream music from URLs")
+    parser = argparse.ArgumentParser(
+        description="Stream music from your SoundCloud feed or likes"
+    )
     # parser.add_argument(
     #     "username", help="SoundCloud username whose liked tracks to play"
     # )
@@ -43,7 +45,7 @@ class ConfigManager:
             content = yaml.load(f, yaml.SafeLoader)
         return content or {}
 
-    def maybe_add_oauth_token(self) -> dict:
+    def maybe_add_oauth_token(self) -> None:
         if "oauth-token" not in self.settings:
             self.settings["oauth-token"] = input(
                 "Please enter your SoundCloud oauth token: "

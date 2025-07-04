@@ -6,7 +6,6 @@ import vlc
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Footer, Header, Static
-from vlc import EventType
 
 from soundcloud_player.soundcloud_client import SoundCloudClient, Track
 
@@ -20,16 +19,16 @@ class VlcWatchDog:
         self.last_track_time = 0
 
     def is_stuck(self) -> bool:
-        if not self.vlc_player.is_playing():
-            return False
         now = time.monotonic()
         track_time = self.vlc_player.get_time()
         if track_time == self.last_track_time:
-            if (now - self.update_time) > 5:
-                return True
+            return (now - self.update_time) > 5
         self.last_track_time = track_time
         self.update_time = now
         return False
+
+    def reset(self) -> None:
+        self.update_time = time.monotonic()
 
 
 class PlayerView(Static):
@@ -45,8 +44,13 @@ class PlayerView(Static):
 
         # Playlist
         playlist = []
-        for i in range(self.player.current_idx - 2, self.player.current_idx + 3):
-            i = i % len(self.player.current_playlist)
+        n_items = 9
+        start = max(self.player.current_idx - n_items // 2, 0)
+        end = start + n_items
+        if end >= len(self.player.current_playlist):
+            offset = end - len(self.player.current_playlist)
+            start, end = start - offset, end - offset
+        for i in range(start, end):
             track = self.player.current_playlist[i]
             title_str = f"[orange]{i + 1}[/orange] {fmt_track(track)}"
             if i == self.player.current_idx:
@@ -60,20 +64,31 @@ class PlayerView(Static):
 
         # Track count
         content.append(
-            f"[dim][orange]{self.player.current_playlist_source.title()}: {len(self.player.current_playlist)} tracks[/orange][/dim]"
+            f"[dim][orange]{self.player.current_playlist_source.title()}:"
+            f" {len(self.player.current_playlist)} tracks[/orange][/dim]"
         )
 
         # Time
-        current = self.player.vlc_player.get_time() or 0
+        current = (
+            self.player.vlc_player.get_time() or 0
+        ) + self.player.current_start_time_s * 1000
         total = self.player.vlc_player.get_length() or 0
         max_blocks = 30
-        progress_blocks = round(current / total * max_blocks) if total else 0
-        content.append(
-            f"[bold]{fmt_time(current)} {'█' * progress_blocks}{'░' * (max_blocks - progress_blocks)} {fmt_time(total)}[/bold]"
-        )
+        prog_blocks = round(current / total * max_blocks) if total else 0
+        prog_line = "[bold]" + fmt_time(current)
+        prog_line += "█" * prog_blocks + "░" * (max_blocks - prog_blocks)
+        prog_line += fmt_time(total) + "[/bold]"
+        content.append(prog_line)
 
         # Volume
         content.append(f"🔈 {self.player.vlc_player.audio_get_volume()}% 🔊")
+
+        # Watchdog status
+        wd = self.player.vlc_watchdog
+        content.append(
+            f"Watchdog status: update {wd.update_time} last"
+            f" {wd.last_track_time} playing {wd.vlc_player.is_playing()}"
+        )
 
         self.update("\n\n".join(content))
 
@@ -81,6 +96,7 @@ class PlayerView(Static):
 class Player(App):
     BINDINGS = [
         ("space", "toggle_play", "Play/Pause"),
+        ("r", "refresh_track", "Refresh"),
         ("s", "shuffle", "Shuffle"),
         ("a", "alphabetic_sort", "A-Z Sort"),
         ("t", "toggle_playlist", "Toggle Likes/Feed"),
@@ -99,17 +115,18 @@ class Player(App):
 
         # Soundcloud setup
         self.sc_client = sc_client
-        self.playlist_generators: dict[str, Generator[type[Track]]] = dict(
-            likes=self.sc_client.get_liked_tracks(),
-            feed=self.sc_client.get_feed(),
+        self.playlist_generators: dict[str, Generator[Track]] = dict(
+            likes=self.sc_client.get_liked_tracks(), feed=self.sc_client.get_feed()
         )
-        self.playlists: dict[str, list[type[Track]]] = dict(likes=[], feed=[])
+        self.playlists: dict[str, list[Track]] = dict(likes=[], feed=[])
         self.liked_track_ids = self.sc_client.get_liked_track_ids()
 
         # Set initial state
-        self.current_idx = None
-        self.current_playlist = []
+        self.current_idx = 0
+        self.current_start_time_s = 0
+        self.current_playlist: list[Track] = []
         self.current_playlist_source: SRC_LITERAL = "feed"
+        self.is_active = False
 
         # VLC setup
         self.vlc_instance = vlc.Instance(
@@ -120,13 +137,6 @@ class Player(App):
         self.vlc_player = self.vlc_instance.media_player_new()
         self.vlc_player.audio_set_volume(70)
         self.vlc_watchdog = VlcWatchDog(self.vlc_player)
-        # self.event_manager = self.vlc_player.event_manager()
-        # self.event_manager.event_attach(
-        #     EventType.MediaPlayerEndReached,
-        #     lambda event: self.app.call_from_thread(
-        #         self.change_track, self.current_idx + 1
-        #     ),
-        # )
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -142,10 +152,8 @@ class Player(App):
 
     def update_display(self) -> None:
         self.query_one(PlayerView).update_view()
-        if self.vlc_watchdog.is_stuck():
-            track_time = self.vlc_player.get_time()
-            self.change_track(self.current_idx)
-            self.vlc_player.seek(track_time)
+        if self.is_active and self.vlc_watchdog.is_stuck():
+            self.refresh_track()
 
     def switch_playlist(self, source: SRC_LITERAL) -> None:
         self.current_playlist_source = source
@@ -156,27 +164,57 @@ class Player(App):
 
     def expand_current_playlist(self, count: int = 20) -> None:
         pl_gen = self.playlist_generators[self.current_playlist_source]
-        new_items = [next(pl_gen, None) for i in range(count)]
-        new_items = [track for track in new_items if track is not None]
+        new_items = [
+            track
+            for track in [next(pl_gen, None) for i in range(count)]
+            if track is not None
+        ]
         self.playlists[self.current_playlist_source].extend(new_items)
         self.current_playlist.extend(new_items)
 
-    def change_track(self, new_idx: int) -> None:
-        self.vlc_player.pause()
+    def change_track(self, new_idx: int, start_time_s: int = 0) -> None:
+        self.pause()
         self.current_idx = new_idx % len(self.current_playlist)
         url = self.sc_client.get_streamable_link(
             self.current_playlist[self.current_idx].id
         )
         media = self.vlc_instance.media_new(url)
+        self.current_start_time_s = start_time_s
+        media.add_option(f"start-time={start_time_s}")
         self.vlc_player.set_media(media)
-        self.vlc_player.play()
         self.update_display()
         self.sub_title = (
             f"Now Playing: {fmt_track(self.current_playlist[self.current_idx])}"
         )
+        self.play()
+
+    def refresh_track(self) -> None:
+        track_time = int(self.vlc_player.get_time() / 1000)
+        self.change_track(
+            self.current_idx, start_time_s=track_time + self.current_start_time_s
+        )
+
+    def play(self) -> None:
+        if self.is_active:
+            return
+        self.vlc_player.play()
+        self.vlc_watchdog.update_time = time.monotonic()
+        self.is_active = True
+
+    def pause(self) -> None:
+        if not self.is_active:
+            return
+        self.is_active = False
+        self.vlc_player.pause()
 
     def action_toggle_play(self) -> None:
-        self.vlc_player.pause()
+        if self.is_active:
+            self.pause()
+        else:
+            self.play()
+
+    def action_refresh_track(self) -> None:
+        self.refresh_track()
 
     def action_shuffle(self) -> None:
         start = self.current_playlist[self.current_idx]

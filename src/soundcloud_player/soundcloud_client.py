@@ -31,7 +31,8 @@ class SoundCloudClient:
         self.session = requests.session()
         self.session.headers = {
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101"
+                " Firefox/140.0"
             ),
             "Authorization": f"OAuth {oauth_token}",
         }
@@ -54,7 +55,7 @@ class SoundCloudClient:
         client_id = client_id_regex.search(r.text)
         if not client_id:
             raise Exception(f"Could not find client_id in script '{url}'")
-        self.session.params |= dict(client_id=client_id.group(1))
+        self.session.params |= dict(client_id=client_id.group(1))  # type: ignore
 
     def get(self, path: str, **params) -> dict:
         r = self.session.get(self.base_url + path, params=params)
