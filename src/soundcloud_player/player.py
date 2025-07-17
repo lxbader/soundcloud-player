@@ -3,6 +3,7 @@ from random import shuffle
 from typing import Generator, Literal
 
 import vlc
+from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Footer, Header, Static
@@ -10,25 +11,6 @@ from textual.widgets import Footer, Header, Static
 from soundcloud_player.soundcloud_client import SoundCloudClient, Track
 
 SRC_LITERAL = Literal["likes", "feed"]
-
-
-class VlcWatchDog:
-    def __init__(self, vlc_player: vlc.MediaPlayer) -> None:
-        self.vlc_player = vlc_player
-        self.update_time = time.monotonic()
-        self.last_track_time = 0
-
-    def is_stuck(self) -> bool:
-        now = time.monotonic()
-        track_time = self.vlc_player.get_time()
-        if track_time == self.last_track_time:
-            return (now - self.update_time) > 5
-        self.last_track_time = track_time
-        self.update_time = now
-        return False
-
-    def reset(self) -> None:
-        self.update_time = time.monotonic()
 
 
 class PlayerView(Static):
@@ -69,26 +51,16 @@ class PlayerView(Static):
         )
 
         # Time
-        current = (
-            self.player.vlc_player.get_time() or 0
-        ) + self.player.current_start_time_s * 1000
-        total = self.player.vlc_player.get_length() or 0
+        current, total = self.player.get_time()
         max_blocks = 30
         prog_blocks = round(current / total * max_blocks) if total else 0
-        prog_line = "[bold]" + fmt_time(current)
+        prog_line = "[bold]" + fmt_time(current) + " "
         prog_line += "█" * prog_blocks + "░" * (max_blocks - prog_blocks)
-        prog_line += fmt_time(total) + "[/bold]"
+        prog_line += " " + fmt_time(total) + "[/bold]"
         content.append(prog_line)
 
         # Volume
         content.append(f"🔈 {self.player.vlc_player.audio_get_volume()}% 🔊")
-
-        # Watchdog status
-        wd = self.player.vlc_watchdog
-        content.append(
-            f"Watchdog status: update {wd.update_time} last"
-            f" {wd.last_track_time} playing {wd.vlc_player.is_playing()}"
-        )
 
         self.update("\n\n".join(content))
 
@@ -136,7 +108,6 @@ class Player(App):
         self.vlc_instance.log_unset()
         self.vlc_player = self.vlc_instance.media_player_new()
         self.vlc_player.audio_set_volume(70)
-        self.vlc_watchdog = VlcWatchDog(self.vlc_player)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -150,10 +121,26 @@ class Player(App):
         self.update_display()
         self.set_interval(0.2, self.update_display)
 
+    def on_unmount(self) -> None:
+        self.is_active = False
+
     def update_display(self) -> None:
         self.query_one(PlayerView).update_view()
-        if self.is_active and self.vlc_watchdog.is_stuck():
-            self.refresh_track()
+
+    @work(exclusive=True, thread=True)
+    def watch_vlc(self) -> None:
+        # Watch VLC player closely, it tends to die every once in a while so we cannot
+        # trust it to get itself unstuck and/or provide track change events
+        while self.is_active:
+            current, total = self.get_time()
+            if total and not self.vlc_player.is_playing():
+                if current / total > 0.999:
+                    self.call_from_thread(
+                        self.change_track, new_idx=self.current_idx + 1
+                    )
+                else:
+                    self.call_from_thread(self.refresh_track)
+            time.sleep(0.2)
 
     def switch_playlist(self, source: SRC_LITERAL) -> None:
         self.current_playlist_source = source
@@ -198,14 +185,19 @@ class Player(App):
         if self.is_active:
             return
         self.vlc_player.play()
-        self.vlc_watchdog.update_time = time.monotonic()
         self.is_active = True
+        self.watch_vlc()
 
     def pause(self) -> None:
         if not self.is_active:
             return
         self.is_active = False
         self.vlc_player.pause()
+
+    def get_time(self) -> tuple[int, int]:
+        current = (self.vlc_player.get_time() or 0) + self.current_start_time_s * 1000
+        total = self.vlc_player.get_length() or 0
+        return current, total
 
     def action_toggle_play(self) -> None:
         if self.is_active:
