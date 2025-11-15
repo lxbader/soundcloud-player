@@ -81,14 +81,15 @@ class Player(App):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, sc_client: SoundCloudClient) -> None:
+    def __init__(self, sc_client: SoundCloudClient, min_track_length_sec: int) -> None:
         super().__init__()
         self.theme = "textual-dark"
 
         # Soundcloud setup
         self.sc_client = sc_client
         self.playlist_generators: dict[str, Generator[Track]] = dict(
-            likes=self.sc_client.get_liked_tracks(), feed=self.sc_client.get_feed()
+            likes=self.sc_client.get_liked_tracks(),
+            feed=self.sc_client.get_feed(min_track_length_sec=min_track_length_sec),
         )
         self.playlists: dict[str, list[Track]] = dict(likes=[], feed=[])
         self.liked_track_ids = self.sc_client.get_liked_track_ids()

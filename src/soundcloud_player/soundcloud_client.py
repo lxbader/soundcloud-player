@@ -102,14 +102,14 @@ class SoundCloudClient:
                 artist=t["track"]["user"]["username"],
             )
 
-    def get_feed(self, min_length_sec: int = 1800) -> Generator[Track]:
+    def get_feed(self, min_track_length_sec) -> Generator[Track]:
         seen = set()
         for i in self.get_collection(
             "stream", activityTypes="TrackPost,TrackRepost,PlaylistPost"
         ):
             if (
                 "track" not in i
-                or i["track"]["duration"] < min_length_sec * 1000
+                or i["track"]["duration"] < min_track_length_sec * 1000
                 or i["track"]["id"] in seen
             ):
                 continue
