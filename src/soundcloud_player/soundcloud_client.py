@@ -1,9 +1,15 @@
 import json
 import re
+import shutil
+import subprocess
+import tempfile
+import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Generator
 
 import requests
+from yaspin import yaspin
 
 
 @dataclass
@@ -102,7 +108,7 @@ class SoundCloudClient:
                 artist=t["track"]["user"]["username"],
             )
 
-    def get_feed(self, min_track_length_sec) -> Generator[Track]:
+    def get_feed(self, min_track_length_sec: int) -> Generator[Track]:
         seen = set()
         for i in self.get_collection(
             "stream", activityTypes="TrackPost,TrackRepost,PlaylistPost"
@@ -132,3 +138,48 @@ class SoundCloudClient:
     #         self.base_url + f"users/{self.user_id}/track_likes/{track_id}"
     #     )
     #     r.raise_for_status()
+
+    def download_track(self, track_id: int, dst_path: Path) -> Path:
+        track = self.get(f"tracks/{track_id}")
+        url = self.get_streamable_link(track_id=track_id)
+
+        def sanitise(s: str) -> str:
+            return re.sub(
+                r"\W+", "_", unicodedata.normalize("NFC", str.lower(s))
+            ).strip("_")
+
+        title = sanitise(track["title"])
+        artist = sanitise(track["user"]["username"])
+        filename = (
+            ("" if artist in title else (artist + "_"))
+            + title
+            + "_"
+            + str(track_id)
+            + ".mp3"
+        )
+        output_path = dst_path / filename
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_path = Path(tmpdir).joinpath("scdl-download.mp3").absolute()
+            with yaspin(text="Downloading " + filename) as spinner:
+                p = subprocess.Popen(
+                    [
+                        "ffmpeg",
+                        "-i",
+                        url,
+                        "-c",
+                        "copy",
+                        str(temp_path),
+                        "-loglevel",
+                        "error",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                stdout, stderr = p.communicate()
+            if stderr:
+                raise Exception("Download error: " + stderr.decode("utf-8"))
+            else:
+                dst_path.mkdir(exist_ok=True)
+                shutil.move(temp_path, output_path)
+        return output_path

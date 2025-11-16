@@ -16,6 +16,7 @@ A terminal-based music player that:
 - Lives in your terminal where it belongs
 - Has keyboard shortcuts so you never leave your flow state
 - Works reliably using VLC on both Windows and MacOS
+- Liked tracks can be downloaded for use on offline devices
 
 ## Installation
 
@@ -26,9 +27,10 @@ uv pip install -e .
 ## Usage
 
 ```bash
-scplay                           # Start with default 30min filter
-scplay --min-track-length 60     # Only tracks 60+ minutes
-scplay --reset-config            # Re-enter your OAuth token (basically never needed)
+scplay start                         # Start with default 30min filter
+scplay start --min-track-length 60   # Only tracks 60+ minutes
+scplay start --reset-config          # Re-enter your OAuth token (basically never needed)
+scplay download                      # Download all your liked tracks for offline use (the player doesn't use them yet)
 ```
 
 ## Controls
@@ -60,5 +62,4 @@ MIT
 
 - Like/unlike tracks using `l`
 - Allow seeking tracks
-- Maybe combine this project with another messy one of mine that keeps an offline
-  library of liked tracks
+- Use downloaded tracks to prevent unnecessary network traffic
