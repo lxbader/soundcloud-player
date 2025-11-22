@@ -1,15 +1,9 @@
 import json
 import re
-import shutil
-import subprocess
-import tempfile
-import unicodedata
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Generator
 
 import requests
-from yaspin import yaspin
 
 
 @dataclass
@@ -17,15 +11,12 @@ class Track:
     id: int
     title: str
     artist: str
+    duration_secs: float
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Track):
             return NotImplemented
-        return (
-            self.id == other.id
-            and self.title == other.title
-            and self.artist == other.artist
-        )
+        return self.id == other.id
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -106,6 +97,7 @@ class SoundCloudClient:
                 id=t["track"]["id"],
                 title=t["track"]["title"],
                 artist=t["track"]["user"]["username"],
+                duration_secs=t["track"]["duration"] / 1000,
             )
 
     def get_feed(self, min_track_length_sec: int) -> Generator[Track]:
@@ -123,6 +115,7 @@ class SoundCloudClient:
                 id=i["track"]["id"],
                 title=i["track"]["title"],
                 artist=i["track"]["user"]["username"],
+                duration_secs=i["track"]["duration"] / 1000,
             )
             seen.add(track.id)
             yield track
@@ -138,48 +131,3 @@ class SoundCloudClient:
     #         self.base_url + f"users/{self.user_id}/track_likes/{track_id}"
     #     )
     #     r.raise_for_status()
-
-    def download_track(self, track_id: int, dst_path: Path) -> Path:
-        track = self.get(f"tracks/{track_id}")
-        url = self.get_streamable_link(track_id=track_id)
-
-        def sanitise(s: str) -> str:
-            return re.sub(
-                r"\W+", "_", unicodedata.normalize("NFC", str.lower(s))
-            ).strip("_")
-
-        title = sanitise(track["title"])
-        artist = sanitise(track["user"]["username"])
-        filename = (
-            ("" if artist in title else (artist + "_"))
-            + title
-            + "_"
-            + str(track_id)
-            + ".mp3"
-        )
-        output_path = dst_path / filename
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            temp_path = Path(tmpdir).joinpath("scdl-download.mp3").absolute()
-            with yaspin(text="Downloading " + filename) as spinner:
-                p = subprocess.Popen(
-                    [
-                        "ffmpeg",
-                        "-i",
-                        url,
-                        "-c",
-                        "copy",
-                        str(temp_path),
-                        "-loglevel",
-                        "error",
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                stdout, stderr = p.communicate()
-            if stderr:
-                raise Exception("Download error: " + stderr.decode("utf-8"))
-            else:
-                dst_path.mkdir(exist_ok=True)
-                shutil.move(temp_path, output_path)
-        return output_path

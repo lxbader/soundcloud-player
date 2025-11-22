@@ -1,7 +1,7 @@
 import argparse
-import re
 
 from soundcloud_player.config_manager import ConfigManager
+from soundcloud_player.download import download_likes
 from soundcloud_player.player import Player
 from soundcloud_player.soundcloud_client import SoundCloudClient
 
@@ -33,23 +33,6 @@ def create_parser():
 def start_player(sc_client: SoundCloudClient, args: argparse.Namespace, **kwargs):
     app = Player(sc_client=sc_client, min_track_length_sec=args.min_track_length * 60)
     app.run()
-
-
-def download_likes(
-    sc_client: SoundCloudClient, args: argparse.Namespace, cfg_manager: ConfigManager
-):
-    dst_path = cfg_manager.get_local_lib()
-    all_mp3s = list(dst_path.rglob("*.mp3"))
-    all_track_ids = []
-    for file in all_mp3s:
-        matches = re.findall(r"_([0-9]+)\.mp3", str(file.name))
-        if matches:
-            all_track_ids.append(int(matches[0]))
-    for track in sc_client.get_liked_tracks():
-        if track.id not in all_track_ids:
-            output = sc_client.download_track(track_id=track.id, dst_path=dst_path)
-            print("Successfully downloaded " + output.name)
-    print("All liked tracks downloaded")
 
 
 def main():
