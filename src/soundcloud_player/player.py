@@ -9,8 +9,10 @@ from textual.containers import Container
 from textual.widgets import Footer, Header, Static
 
 from soundcloud_player.soundcloud_client import SoundCloudClient, Track
+from soundcloud_player.visualisation import print_braille_multiline, update_viz
 
 SRC_LITERAL = Literal["likes", "feed"]
+NAV_WIDTH = 40
 
 
 class PlayerView(Static):
@@ -50,13 +52,17 @@ class PlayerView(Static):
             f" {len(self.player.current_playlist)} tracks[/orange][/dim]"
         )
 
+        # Visualisation
+        self.player.update_viz()
+        content.append(print_braille_multiline(self.player.viz))
+
         # Time
         current, total = self.player.get_time()
-        max_blocks = 30
+        max_blocks = NAV_WIDTH - 1  # knob takes 1 char
         prog_blocks = round(current / total * max_blocks) if total else 0
-        prog_line = "[bold]" + fmt_time(current) + " "
-        prog_line += "█" * prog_blocks + "░" * (max_blocks - prog_blocks)
-        prog_line += " " + fmt_time(total) + "[/bold]"
+        prog_line = "[bold]" + fmt_time(current) + "[/bold] [dim]"
+        prog_line += "─" * prog_blocks + "█" + "─" * (max_blocks - prog_blocks)
+        prog_line += "[/dim] [bold]" + fmt_time(total) + "[/bold]"
         content.append(prog_line)
 
         # Volume
@@ -100,6 +106,8 @@ class Player(App):
         self.current_playlist: list[Track] = []
         self.current_playlist_source: SRC_LITERAL = "feed"
         self.is_active = False
+        self.viz: list[float] | None = None
+        self.update_viz(reset=True)
 
         # VLC setup
         self.vlc_instance = vlc.Instance(
@@ -120,7 +128,7 @@ class Player(App):
     def on_mount(self) -> None:
         self.switch_playlist(self.current_playlist_source)
         self.update_display()
-        self.set_interval(0.2, self.update_display)
+        self.set_interval(0.05, self.update_display)
 
     def on_unmount(self) -> None:
         self.is_active = False
@@ -170,6 +178,7 @@ class Player(App):
         self.current_start_time_s = start_time_s
         media.add_option(f"start-time={start_time_s}")
         self.vlc_player.set_media(media)
+        self.update_viz(reset=True)
         self.update_display()
         self.sub_title = (
             f"Now Playing: {fmt_track(self.current_playlist[self.current_idx])}"
@@ -199,6 +208,15 @@ class Player(App):
         current = (self.vlc_player.get_time() or 0) + self.current_start_time_s * 1000
         total = self.vlc_player.get_length() or 0
         return current, total
+
+    def update_viz(self, reset: bool = False):
+        if reset or not self.viz:
+            self.viz = [0.0] * NAV_WIDTH * 2
+            return
+        if not self.is_active:
+            return
+        self.viz = update_viz(self.viz)
+        return
 
     def action_toggle_play(self) -> None:
         if self.is_active:
@@ -267,7 +285,7 @@ def fmt_time(msec: int) -> str:
     hours = sec // 3600
     mins = sec % 3600 // 60
     secs = sec % 60
-    return (f"{hours:02d}:" if hours else "") + f"{mins:02d}:{secs:02d}"
+    return (f"{hours:02d}:" if hours else "   ") + f"{mins:02d}:{secs:02d}"
 
 
 def fmt_track(track: Track) -> str:
