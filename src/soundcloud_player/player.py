@@ -13,6 +13,7 @@ from soundcloud_player.visualisation import print_braille_multiline, update_viz
 
 SRC_LITERAL = Literal["likes", "feed"]
 NAV_WIDTH = 40
+N_ITEMS = 9
 
 
 class PlayerView(Static):
@@ -28,16 +29,14 @@ class PlayerView(Static):
 
         # Playlist
         playlist = []
-        n_items = 9
-        start = max(self.player.current_idx - n_items // 2, 0)
-        end = start + n_items
-        if end >= len(self.player.current_playlist):
-            offset = end - len(self.player.current_playlist)
-            start, end = start - offset, end - offset
-        for i in range(start, end):
-            track = self.player.current_playlist[i]
+        start = max(self.player.playlist_idx[self.player.src] - N_ITEMS // 2, 0)
+        for i in range(start, start + N_ITEMS):
+            if i < 0 or i >= len(self.player.playlist[self.player.src]):
+                playlist.append("")
+                continue
+            track = self.player.playlist[self.player.src][i]
             title_str = f"[orange]{i + 1}[/orange] {fmt_track(track)}"
-            if i == self.player.current_idx:
+            if i == self.player.playlist_idx[self.player.src]:
                 title_str = f"[bold]{title_str}[/bold]"
             else:
                 title_str = f"[dim]{title_str}[/dim]"
@@ -45,12 +44,6 @@ class PlayerView(Static):
                 title_str = title_str + " [blue](Liked)[/blue]"
             playlist.append(title_str)
         content.append("\n".join(playlist))
-
-        # Track count
-        content.append(
-            f"[dim][orange]{self.player.current_playlist_source.title()}:"
-            f" {len(self.player.current_playlist)} tracks[/orange][/dim]"
-        )
 
         # Visualisation
         self.player.update_viz()
@@ -78,7 +71,6 @@ class Player(App):
         ("s", "shuffle", "Shuffle"),
         ("a", "alphabetic_sort", "A-Z Sort"),
         ("t", "toggle_playlist", "Toggle Likes/Feed"),
-        ("m", "load_more_tracks", "Load More Tracks"),
         # ("l", "toggle_track_like", "Like/Unlike Track"),
         ("left", "previous_track", "Previous"),
         ("right", "next_track", "Next"),
@@ -93,18 +85,17 @@ class Player(App):
 
         # Soundcloud setup
         self.sc_client = sc_client
-        self.playlist_generators: dict[str, Generator[Track]] = dict(
-            likes=self.sc_client.get_liked_tracks(),
-            feed=self.sc_client.get_feed(min_track_length_sec=min_track_length_sec),
-        )
-        self.playlists: dict[str, list[Track]] = dict(likes=[], feed=[])
+        self.playlist_gen: dict[SRC_LITERAL, Generator[Track]] = {
+            "likes": self.sc_client.get_liked_tracks(),
+            "feed": self.sc_client.get_feed(min_track_length_sec=min_track_length_sec),
+        }
+        self.playlist: dict[SRC_LITERAL, list[Track]] = {"likes": [], "feed": []}
+        self.playlist_idx: dict[SRC_LITERAL, int] = {"likes": 0, "feed": 0}
         self.liked_track_ids = self.sc_client.get_liked_track_ids()
 
         # Set initial state
-        self.current_idx = 0
+        self.src: SRC_LITERAL = "feed"
         self.current_start_time_s = 0
-        self.current_playlist: list[Track] = []
-        self.current_playlist_source: SRC_LITERAL = "feed"
         self.is_active = False
         self.viz: list[float] | None = None
         self.update_viz(reset=True)
@@ -126,7 +117,7 @@ class Player(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.switch_playlist(self.current_playlist_source)
+        self.switch_playlist(self.src)
         self.update_display()
         self.set_interval(0.05, self.update_display)
 
@@ -145,34 +136,33 @@ class Player(App):
             if total and not self.vlc_player.is_playing():
                 if current / total > 0.999:
                     self.call_from_thread(
-                        self.change_track, new_idx=self.current_idx + 1
+                        self.change_track, new_idx=self.playlist_idx[self.src] + 1
                     )
                 else:
                     self.call_from_thread(self.refresh_track)
             time.sleep(0.2)
 
     def switch_playlist(self, source: SRC_LITERAL) -> None:
-        self.current_playlist_source = source
-        if not self.playlists[source]:
-            self.expand_current_playlist()
-        self.current_playlist = self.playlists[source].copy()
-        self.change_track(0)
+        self.src = source
+        if not self.playlist[source]:
+            self.expand_current_playlist(count=N_ITEMS)
+        self.change_track(self.playlist_idx[self.src])
 
-    def expand_current_playlist(self, count: int = 20) -> None:
-        pl_gen = self.playlist_generators[self.current_playlist_source]
+    def expand_current_playlist(self, count: int) -> None:
         new_items = [
             track
-            for track in [next(pl_gen, None) for i in range(count)]
+            for track in [next(self.playlist_gen[self.src], None) for i in range(count)]
             if track is not None
         ]
-        self.playlists[self.current_playlist_source].extend(new_items)
-        self.current_playlist.extend(new_items)
+        self.playlist[self.src].extend(new_items)
 
     def change_track(self, new_idx: int, start_time_s: int = 0) -> None:
         self.pause()
-        self.current_idx = new_idx % len(self.current_playlist)
+        self.playlist_idx[self.src] = new_idx
+        if (missing := new_idx + N_ITEMS - len(self.playlist[self.src])) > 0:
+            self.expand_current_playlist(count=missing)
         url = self.sc_client.get_streamable_link(
-            self.current_playlist[self.current_idx].id
+            self.playlist[self.src][self.playlist_idx[self.src]].id
         )
         media = self.vlc_instance.media_new(url)
         self.current_start_time_s = start_time_s
@@ -181,14 +171,16 @@ class Player(App):
         self.update_viz(reset=True)
         self.update_display()
         self.sub_title = (
-            f"Now Playing: {fmt_track(self.current_playlist[self.current_idx])}"
+            "Now Playing:"
+            f" {fmt_track(self.playlist[self.src][self.playlist_idx[self.src]])}"
         )
         self.play()
 
     def refresh_track(self) -> None:
         track_time = int(self.vlc_player.get_time() / 1000)
         self.change_track(
-            self.current_idx, start_time_s=track_time + self.current_start_time_s
+            self.playlist_idx[self.src],
+            start_time_s=track_time + self.current_start_time_s,
         )
 
     def play(self) -> None:
@@ -228,35 +220,28 @@ class Player(App):
         self.refresh_track()
 
     def action_shuffle(self) -> None:
-        start = self.current_playlist[self.current_idx]
+        start = self.playlist[self.src][self.playlist_idx[self.src]]
         rest = (
-            self.current_playlist[: self.current_idx]
-            + self.current_playlist[self.current_idx + 1 :]
+            self.playlist[self.src][: self.playlist_idx[self.src]]
+            + self.playlist[self.src][self.playlist_idx[self.src] + 1 :]
         )
         shuffle(rest)
-        self.current_playlist = [start] + rest
-        self.current_idx = 0
+        self.playlist[self.src] = [start] + rest
+        self.playlist_idx[self.src] = 0
 
     def action_alphabetic_sort(self) -> None:
-        current_track = self.current_playlist[self.current_idx]
-        self.current_playlist.sort(
-            key=lambda track: f"{track.artist.lower()} - {track.title.lower()}"
-        )
-        for i, track in enumerate(self.current_playlist):
+        current_track = self.playlist[self.src][self.playlist_idx[self.src]]
+        self.playlist[self.src].sort(key=lambda tr: fmt_track(tr))
+        for i, track in enumerate(self.playlist[self.src]):
             if track.id == current_track.id:
-                self.current_idx = i
+                self.playlist_idx[self.src] = i
                 break
 
     def action_toggle_playlist(self) -> None:
-        self.switch_playlist(
-            "likes" if self.current_playlist_source == "feed" else "feed"
-        )
-
-    def action_load_more_tracks(self) -> None:
-        self.expand_current_playlist()
+        self.switch_playlist("likes" if self.src == "feed" else "feed")
 
     # def action_toggle_track_like(self) -> None:
-    #     track_id = self.current_playlist[self.current_idx].id
+    #     track_id = self.playlist[self.source][self.playlist_idx[self.source]].id
     #     if not self.liked_track_ids:
     #         return
     #     if track_id in self.liked_track_ids:
@@ -266,10 +251,10 @@ class Player(App):
     #     self.liked_track_ids = self.sc_client.get_liked_track_ids()
 
     def action_next_track(self) -> None:
-        self.change_track(self.current_idx + 1)
+        self.change_track(self.playlist_idx[self.src] + 1)
 
     def action_previous_track(self) -> None:
-        self.change_track(self.current_idx - 1)
+        self.change_track(self.playlist_idx[self.src] - 1)
 
     def action_volume_down(self) -> None:
         vol = max(0, self.vlc_player.audio_get_volume() - 5)

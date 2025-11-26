@@ -16,7 +16,9 @@ DOTS = [
 ]
 
 
-def get_braille_col(left_val: float, right_val: float, n_rows: int) -> list[str]:
+def get_braille_col(
+    left_val: float, right_val: float, n_rows: int, inverse: bool
+) -> list[str]:
     """Given a left and right value (both must be in [0,1]), return Braille characters
     that - stacked from top to bottom - show a representation of the two values. In the
     simplest version where n_rows=1, a left value of 1 and a right value of 0.25 would
@@ -27,17 +29,19 @@ def get_braille_col(left_val: float, right_val: float, n_rows: int) -> list[str]
         total_offset = 0
         # Iterate through Braille dots, bottom up
         for subrow, offsets in enumerate(DOTS[::-1]):
-            height = row * 1 / n_rows + subrow * 1 / n_rows / 4
+            height = row * 1 / n_rows + subrow * 1 / n_rows / 4 + 1 / n_rows / 8
             for val, offset in zip([left_val, right_val], offsets):
-                if val > height:
+                if (val > height) and not inverse:
+                    total_offset |= 1 << offset
+                elif (val < height) and inverse:
                     total_offset |= 1 << offset
         chars.append(chr(BRAILLE_BASE + total_offset))
     return chars[::-1]  # return top-to-bottom view for easier postprocessing
 
 
-def print_braille_multiline(values, n_rows: int = 1) -> str:
+def print_braille_multiline(values, n_rows: int = 1, inverse: bool = False) -> str:
     chars = [
-        get_braille_col(values[i], values[i + 1], n_rows=n_rows)
+        get_braille_col(values[i], values[i + 1], n_rows=n_rows, inverse=inverse)
         for i in range(0, len(values), 2)
     ]
     return "\n".join("".join(col[i] for col in chars) for i in range(n_rows))
