@@ -2,6 +2,7 @@ import argparse
 
 from soundcloud_player.config_manager import ConfigManager
 from soundcloud_player.download import download_likes
+from soundcloud_player.organise import organise_library
 from soundcloud_player.player import Player
 from soundcloud_player.soundcloud_client import SoundCloudClient
 
@@ -27,6 +28,10 @@ def create_parser():
 
     parser_download = subparsers.add_parser("download")
     parser_download.set_defaults(func=download_likes)
+
+    parser_organise = subparsers.add_parser("organise")
+    parser_organise.set_defaults(func=organise_library)
+    parser_organise.add_argument("--prefix", "-p", help="Album prefix", type=str)
     return parser
 
 

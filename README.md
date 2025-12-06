@@ -4,9 +4,13 @@
 
 ## The Problem
 
-You follow a bunch of DJs and radio shows on SoundCloud who post incredible 2-hour mixes. You also follow people who post 90-second edits of cartoon sound effects. Your feed is chaos.
+You follow a bunch of DJs and radio shows on SoundCloud who post incredible 2-hour
+mixes. You also follow people who post 90-second edits of cartoon sound effects. Your
+feed is chaos.
 
-The official SoundCloud player can't filter by track length, requires keeping a browser tab open, and gets in the way when you just want to vibe to long-form mixes while you get some work done.
+The official SoundCloud player can't filter by track length, requires keeping a browser
+tab open, and gets in the way when you just want to vibe to long-form mixes while you
+get some work done.
 
 ## My Solution - Maybe Also Yours?
 
@@ -31,6 +35,7 @@ scplay start                         # Start with default 30min filter
 scplay start --min-track-length 60   # Only tracks 60+ minutes
 scplay start --reset-config          # Re-enter your OAuth token (basically never needed)
 scplay download                      # Download all your liked tracks for offline use (the player doesn't use them yet)
+scplay organise                      # Organise your offline library into folders/albums based on a config (see configs/)
 ```
 
 ## Controls
@@ -47,7 +52,9 @@ scplay download                      # Download all your liked tracks for offlin
 
 ## Setup
 
-You'll need a SoundCloud OAuth token. On first run, you'll be prompted to enter it. Get it from your browser's dev tools while logged into SoundCloud (check the Network tab for any API request and look for the `Authorization` header).
+You'll need a SoundCloud OAuth token. On first run, you'll be prompted to enter it. Get
+it from your browser's dev tools while logged into SoundCloud (check the Network tab for
+any API request and look for the `Authorization` header).
 
 ## Requirements
 
@@ -60,6 +67,5 @@ MIT
 
 ## TODO - Maybe Tomorrow, Maybe Never
 
-- Like/unlike tracks using `l`
 - Allow seeking tracks
 - Use downloaded tracks to prevent unnecessary network traffic

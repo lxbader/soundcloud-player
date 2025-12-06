@@ -196,3 +196,4 @@ cython_debug/
 .python-version
 .aider*
 .envrc
+personal_config/
