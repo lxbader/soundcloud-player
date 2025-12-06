@@ -37,9 +37,10 @@ class ConfigManager:
                 return self.settings[key]
             resp = input(
                 f"Parameter '{key}' is already populated with value"
-                f" '{self.settings[key]}', do you want to overwrite it? [no]"
+                f" '{self.settings[key]}', do you want to overwrite it? Only 'yes' is"
+                " accepted [no]"
             )
-            if not resp or resp == "no":
+            if resp != "yes":
                 print(f"Leaving '{key}' untouched")
                 return self.settings[key]
         self.settings[key] = input(prompt + " ")
@@ -68,3 +69,15 @@ class ConfigManager:
             self.settings.pop(param)
             local_lib = Path(self.get(param, prompt))
         return local_lib
+
+    def get_classification_config(self) -> Path:
+        param = "classification-cfg"
+        prompt = (
+            "Please provide the location of your library classification config yml:"
+        )
+        class_cfg = Path(self.get(param, prompt))
+        while not class_cfg.exists():
+            print(f"File '{class_cfg}' does not exist")
+            self.settings.pop(param)
+            class_cfg = Path(self.get(param, prompt))
+        return class_cfg
