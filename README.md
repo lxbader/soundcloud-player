@@ -19,7 +19,7 @@ A terminal-based music player that:
 - Filters out short tracks (configurable, defaults to 30min+)
 - Lives in your terminal where it belongs
 - Has keyboard shortcuts so you never leave your flow state
-- Works reliably using VLC on both Windows and MacOS
+- Works reliably using VLC on Windows, MacOS, and Linux
 - Liked tracks can be downloaded for use on offline devices
 
 ## Installation
