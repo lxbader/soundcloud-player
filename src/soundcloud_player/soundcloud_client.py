@@ -1,6 +1,7 @@
 import json
 import re
 from dataclasses import dataclass
+from functools import cache
 from typing import Any, Generator
 
 import requests
@@ -73,6 +74,7 @@ class SoundCloudClient:
             if not next_url:
                 break
 
+    @cache
     def get_streamable_link(self, track_id: int) -> str:
         track = self.get(f"tracks/{track_id}")
         transcoding = None
