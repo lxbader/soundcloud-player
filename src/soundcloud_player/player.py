@@ -50,7 +50,7 @@ class PlayerView(Static):
         content.append(print_braille_multiline(self.player.viz))
 
         # Time
-        current, total = self.player.get_time()
+        current, total = self.player.get_time_ms()
         max_blocks = NAV_WIDTH - 1  # knob takes 1 char
         prog_blocks = round(current / total * max_blocks) if total else 0
         prog_line = "[bold]" + fmt_time(current) + "[/bold] [dim]"
@@ -76,6 +76,17 @@ class Player(App):
         ("right", "next_track", "Next"),
         ("down", "volume_down", "Vol Down"),
         ("up", "volume_up", "Vol Up"),
+        ("comma", "seek_backward", "<<"),
+        ("period", "seek_forward", ">>"),
+        ("1", "seek_10", "10%"),
+        ("2", "seek_20", "20%"),
+        ("3", "seek_30", "30%"),
+        ("4", "seek_40", "40%"),
+        ("5", "seek_50", "50%"),
+        ("6", "seek_60", "60%"),
+        ("7", "seek_70", "70%"),
+        ("8", "seek_80", "80%"),
+        ("9", "seek_90", "90%"),
         ("q", "quit", "Quit"),
     ]
 
@@ -95,7 +106,7 @@ class Player(App):
 
         # Set initial state
         self.src: SRC_LITERAL = "feed"
-        self.current_start_time_s = 0
+        self.current_start_time_ms = 0
         self.is_active = False
         self.viz: list[float] | None = None
         self.update_viz(reset=True)
@@ -132,7 +143,7 @@ class Player(App):
         # Watch VLC player closely, it tends to die every once in a while so we cannot
         # trust it to get itself unstuck and/or provide track change events
         while self.is_active:
-            current, total = self.get_time()
+            current, total = self.get_time_ms()
             if total and not self.vlc_player.is_playing():
                 if current / total > 0.999:
                     self.call_from_thread(
@@ -156,7 +167,7 @@ class Player(App):
         ]
         self.playlist[self.src].extend(new_items)
 
-    def change_track(self, new_idx: int, start_time_s: int = 0) -> None:
+    def change_track(self, new_idx: int, start_time_ms: int = 0) -> None:
         self.pause()
         self.playlist_idx[self.src] = new_idx
         if (missing := new_idx + N_ITEMS - len(self.playlist[self.src])) > 0:
@@ -165,8 +176,8 @@ class Player(App):
             self.playlist[self.src][self.playlist_idx[self.src]].id
         )
         media = self.vlc_instance.media_new(url)
-        self.current_start_time_s = start_time_s
-        media.add_option(f"start-time={start_time_s}")
+        self.current_start_time_ms = start_time_ms
+        media.add_option(f"start-time={int(start_time_ms / 1000)}")
         self.vlc_player.set_media(media)
         self.update_viz(reset=True)
         self.update_display()
@@ -177,11 +188,8 @@ class Player(App):
         self.play()
 
     def refresh_track(self) -> None:
-        track_time = int(self.vlc_player.get_time() / 1000)
-        self.change_track(
-            self.playlist_idx[self.src],
-            start_time_s=track_time + self.current_start_time_s,
-        )
+        current, _ = self.get_time_ms()
+        self.change_track(self.playlist_idx[self.src], start_time_ms=current)
 
     def play(self) -> None:
         if self.is_active:
@@ -196,8 +204,8 @@ class Player(App):
         self.is_active = False
         self.vlc_player.pause()
 
-    def get_time(self) -> tuple[int, int]:
-        current = (self.vlc_player.get_time() or 0) + self.current_start_time_s * 1000
+    def get_time_ms(self) -> tuple[int, int]:
+        current = (self.vlc_player.get_time() or 0) + self.current_start_time_ms
         total = self.vlc_player.get_length() or 0
         return current, total
 
@@ -263,6 +271,54 @@ class Player(App):
     def action_volume_up(self) -> None:
         vol = min(100, self.vlc_player.audio_get_volume() + 5)
         self.vlc_player.audio_set_volume(vol)
+
+    def seek_to_fraction(self, fraction: float) -> None:
+        _, total = self.get_time_ms()
+        if not total:
+            return
+        target_time_ms = int(fraction * total)
+        self.change_track(self.playlist_idx[self.src], start_time_ms=target_time_ms)
+
+    def seek_relative(self, delta_s: int) -> None:
+        """Seek forward or backward by a relative amount in milliseconds."""
+        current, total = self.get_time_ms()
+        if not total:
+            return
+        target_time_ms = max(0, min(current + delta_s * 1000, total))
+        self.change_track(self.playlist_idx[self.src], start_time_ms=target_time_ms)
+
+    def action_seek_backward(self) -> None:
+        self.seek_relative(delta_s=-10)
+
+    def action_seek_forward(self) -> None:
+        self.seek_relative(delta_s=10)
+
+    def action_seek_10(self) -> None:
+        self.seek_to_fraction(0.1)
+
+    def action_seek_20(self) -> None:
+        self.seek_to_fraction(0.2)
+
+    def action_seek_30(self) -> None:
+        self.seek_to_fraction(0.3)
+
+    def action_seek_40(self) -> None:
+        self.seek_to_fraction(0.4)
+
+    def action_seek_50(self) -> None:
+        self.seek_to_fraction(0.5)
+
+    def action_seek_60(self) -> None:
+        self.seek_to_fraction(0.6)
+
+    def action_seek_70(self) -> None:
+        self.seek_to_fraction(0.7)
+
+    def action_seek_80(self) -> None:
+        self.seek_to_fraction(0.8)
+
+    def action_seek_90(self) -> None:
+        self.seek_to_fraction(0.9)
 
 
 def fmt_time(msec: int) -> str:
