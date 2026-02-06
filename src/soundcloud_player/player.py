@@ -67,17 +67,15 @@ class PlayerView(Static):
 class Player(App):
     BINDINGS = [
         ("space", "toggle_play", "Play/Pause"),
-        ("r", "refresh_track", "Refresh"),
         ("s", "shuffle", "Shuffle"),
         ("a", "alphabetic_sort", "A-Z Sort"),
         ("t", "toggle_playlist", "Toggle Likes/Feed"),
-        # ("l", "toggle_track_like", "Like/Unlike Track"),
         ("left", "previous_track", "Previous"),
         ("right", "next_track", "Next"),
         ("down", "volume_down", "Vol Down"),
         ("up", "volume_up", "Vol Up"),
         ("comma", "seek_backward", "<<"),
-        ("period", "seek_forward", ">>"),
+        (".", "seek_forward", ">>"),
         ("1", "seek_10", "10%"),
         ("2", "seek_20", "20%"),
         ("3", "seek_30", "30%"),
@@ -106,8 +104,9 @@ class Player(App):
 
         # Set initial state
         self.src: SRC_LITERAL = "feed"
-        self.current_start_time_ms = 0
-        self.is_active = False
+        self.current_time_ms = 0
+        self.last_start_time_ms = 0
+        self.is_playing = True
         self.viz: list[float] | None = None
         self.update_viz(reset=True)
 
@@ -119,6 +118,7 @@ class Player(App):
         self.vlc_instance.log_unset()
         self.vlc_player = self.vlc_instance.media_player_new()
         self.vlc_player.audio_set_volume(70)
+        self.vlc_active = True
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -131,33 +131,51 @@ class Player(App):
         self.switch_playlist(self.src)
         self.update_display()
         self.set_interval(0.05, self.update_display)
+        self.run_vlc()
 
     def on_unmount(self) -> None:
-        self.is_active = False
+        self.vlc_active = False
 
     def update_display(self) -> None:
         self.query_one(PlayerView).update_view()
 
     @work(exclusive=True, thread=True)
-    def watch_vlc(self) -> None:
-        # Watch VLC player closely, it tends to die every once in a while so we cannot
-        # trust it to get itself unstuck and/or provide track change events
-        while self.is_active:
-            current, total = self.get_time_ms()
-            if total and not self.vlc_player.is_playing():
-                if current / total > 0.999:
+    def run_vlc(self) -> None:
+        while self.vlc_active:
+            if self.is_playing:
+                media = self.vlc_player.get_media()
+                act_url = media.get_mrl() if media else None
+                exp_url = self.sc_client.get_streamable_link(
+                    self.playlist[self.src][self.playlist_idx[self.src]].id
+                )
+                current_ms, total_ms = self.get_time_ms()
+                diff = abs(self.current_time_ms - current_ms) / 1000
+                # (Re)start track if the URL has changed and/or the time has been
+                # changed
+                if act_url != exp_url or diff > 3:
+                    media = self.vlc_instance.media_new(exp_url)
+                    media.add_option(f"start-time={int(self.current_time_ms / 1000)}")
+                    self.last_start_time_ms = self.current_time_ms
+                    self.vlc_player.set_media(media)
+                self.vlc_player.play()
+                current_ms, total_ms = self.get_time_ms()
+                if total_ms and current_ms / total_ms > 0.999:
                     self.call_from_thread(
                         self.change_track, new_idx=self.playlist_idx[self.src] + 1
                     )
-                else:
-                    self.call_from_thread(self.refresh_track)
+                    continue
+                self.current_time_ms = current_ms
+            elif not self.is_playing and self.vlc_player.is_playing():
+                self.vlc_player.pause()
             time.sleep(0.2)
 
     def switch_playlist(self, source: SRC_LITERAL) -> None:
+        self.is_playing = False
         self.src = source
         if not self.playlist[source]:
             self.expand_current_playlist(count=N_ITEMS)
         self.change_track(self.playlist_idx[self.src])
+        self.is_playing = True
 
     def expand_current_playlist(self, count: int) -> None:
         new_items = [
@@ -167,45 +185,43 @@ class Player(App):
         ]
         self.playlist[self.src].extend(new_items)
 
-    def change_track(self, new_idx: int, start_time_ms: int = 0) -> None:
-        self.pause()
+    def set_time(self, time_ms):
+        self.current_time_ms = time_ms
+
+    def change_track(self, new_idx: int) -> None:
         self.playlist_idx[self.src] = new_idx
         if (missing := new_idx + N_ITEMS - len(self.playlist[self.src])) > 0:
             self.expand_current_playlist(count=missing)
-        url = self.sc_client.get_streamable_link(
-            self.playlist[self.src][self.playlist_idx[self.src]].id
-        )
-        media = self.vlc_instance.media_new(url)
-        self.current_start_time_ms = start_time_ms
-        media.add_option(f"start-time={int(start_time_ms / 1000)}")
-        self.vlc_player.set_media(media)
+        self.current_time_ms = 0
         self.update_viz(reset=True)
         self.update_display()
         self.sub_title = (
             "Now Playing:"
             f" {fmt_track(self.playlist[self.src][self.playlist_idx[self.src]])}"
         )
-        self.play()
-
-    def refresh_track(self) -> None:
-        current, _ = self.get_time_ms()
-        self.change_track(self.playlist_idx[self.src], start_time_ms=current)
 
     def play(self) -> None:
-        if self.is_active:
-            return
-        self.vlc_player.play()
-        self.is_active = True
-        self.watch_vlc()
+        self.is_playing = True
 
     def pause(self) -> None:
-        if not self.is_active:
+        self.is_playing = False
+
+    def seek_to_fraction(self, fraction: float) -> None:
+        _, total = self.get_time_ms()
+        if not total:
             return
-        self.is_active = False
-        self.vlc_player.pause()
+        target_time_ms = int(fraction * total)
+        self.set_time(target_time_ms)
+
+    def seek_relative(self, delta_s: int) -> None:
+        current, total = self.get_time_ms()
+        if not total:
+            return
+        target_time_ms = max(0, min(current + delta_s * 1000, total))
+        self.set_time(target_time_ms)
 
     def get_time_ms(self) -> tuple[int, int]:
-        current = (self.vlc_player.get_time() or 0) + self.current_start_time_ms
+        current = (self.vlc_player.get_time() or 0) + self.last_start_time_ms
         total = self.vlc_player.get_length() or 0
         return current, total
 
@@ -213,19 +229,16 @@ class Player(App):
         if reset or not self.viz:
             self.viz = [0.0] * NAV_WIDTH * 2
             return
-        if not self.is_active:
+        if not self.is_playing:
             return
         self.viz = update_viz(self.viz)
         return
 
     def action_toggle_play(self) -> None:
-        if self.is_active:
+        if self.is_playing:
             self.pause()
         else:
             self.play()
-
-    def action_refresh_track(self) -> None:
-        self.refresh_track()
 
     def action_shuffle(self) -> None:
         start = self.playlist[self.src][self.playlist_idx[self.src]]
@@ -248,16 +261,6 @@ class Player(App):
     def action_toggle_playlist(self) -> None:
         self.switch_playlist("likes" if self.src == "feed" else "feed")
 
-    # def action_toggle_track_like(self) -> None:
-    #     track_id = self.playlist[self.source][self.playlist_idx[self.source]].id
-    #     if not self.liked_track_ids:
-    #         return
-    #     if track_id in self.liked_track_ids:
-    #         self.sc_client.unlike_track(track_id)
-    #     else:
-    #         self.sc_client.like_track(track_id)
-    #     self.liked_track_ids = self.sc_client.get_liked_track_ids()
-
     def action_next_track(self) -> None:
         self.change_track(self.playlist_idx[self.src] + 1)
 
@@ -271,21 +274,6 @@ class Player(App):
     def action_volume_up(self) -> None:
         vol = min(100, self.vlc_player.audio_get_volume() + 5)
         self.vlc_player.audio_set_volume(vol)
-
-    def seek_to_fraction(self, fraction: float) -> None:
-        _, total = self.get_time_ms()
-        if not total:
-            return
-        target_time_ms = int(fraction * total)
-        self.change_track(self.playlist_idx[self.src], start_time_ms=target_time_ms)
-
-    def seek_relative(self, delta_s: int) -> None:
-        """Seek forward or backward by a relative amount in milliseconds."""
-        current, total = self.get_time_ms()
-        if not total:
-            return
-        target_time_ms = max(0, min(current + delta_s * 1000, total))
-        self.change_track(self.playlist_idx[self.src], start_time_ms=target_time_ms)
 
     def action_seek_backward(self) -> None:
         self.seek_relative(delta_s=-10)
