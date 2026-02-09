@@ -14,7 +14,7 @@ class ConfigManager:
         elif sys.platform == "win32":
             data_root = os.getenv("LOCALAPPDATA")
         else:
-            raise NotImplementedError("Only Windows and MacOS are supported")
+            data_root = os.getenv("XDG_DATA_HOME") or (Path.home() / ".local/share")
         data_dir = Path(data_root) / "scplay"  # type: ignore
         data_dir.mkdir(exist_ok=True, parents=True)
         self.cfg_file = data_dir / "config.yaml"
