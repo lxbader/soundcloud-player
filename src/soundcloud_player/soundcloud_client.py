@@ -1,7 +1,7 @@
 import json
 import re
+import time
 from dataclasses import dataclass
-from functools import cache
 from typing import Any, Generator
 
 import requests
@@ -36,6 +36,7 @@ class SoundCloudClient:
         }
         self.update_client_id()
         self.user_id = self.get("me")["id"]
+        self.streamable_links: dict[int, tuple[str, float]] = {}
 
     def update_client_id(self) -> None:
         assets_script_regex = re.compile(
@@ -74,8 +75,12 @@ class SoundCloudClient:
             if not next_url:
                 break
 
-    @cache
     def get_streamable_link(self, track_id: int) -> str:
+        now = time.time()
+        if cached := self.streamable_links.get(track_id, None):
+            link, from_time = cached
+            if now - from_time < 3600:
+                return link
         track = self.get(f"tracks/{track_id}")
         transcoding = None
         for t in track["media"]["transcodings"]:
@@ -86,7 +91,9 @@ class SoundCloudClient:
             raise Exception("No usable transcoding found.")
         r = self.session.get(transcoding["url"])
         r.raise_for_status()
-        return r.json()["url"]
+        link = r.json()["url"]
+        self.streamable_links[track_id] = (link, now)
+        return link
 
     def get_liked_track_ids(self) -> set[int]:
         return set(self.get_collection("me/track_likes/ids"))
@@ -121,15 +128,3 @@ class SoundCloudClient:
             )
             seen.add(track.id)
             yield track
-
-    # def like_track(self, track_id: int):
-    #     r = self.session.put(
-    #         self.base_url + f"users/{self.user_id}/track_likes/{track_id}"
-    #     )
-    #     r.raise_for_status()
-    #
-    # def unlike_track(self, track_id: int):
-    #     r = self.session.delete(
-    #         self.base_url + f"users/{self.user_id}/track_likes/{track_id}"
-    #     )
-    #     r.raise_for_status()
