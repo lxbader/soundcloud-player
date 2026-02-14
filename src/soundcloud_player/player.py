@@ -103,12 +103,14 @@ class Player(App):
         self.liked_track_ids = self.sc_client.get_liked_track_ids()
 
         # Set initial state
-        self.src: SRC_LITERAL = "feed"
-        self.current_time_ms = 0
-        self.last_start_time_ms = 0
-        self.is_playing = True
-        self.viz: list[float] | None = None
+        self.src: SRC_LITERAL = "feed"  # which playlist to show/play
+        self.current_time_ms = 0  # track time in ms from the start of the track
+        self.last_start_time_ms = 0  # offset with which the track was last started
+        self.is_playing = True  # whether the player is currently playing or paused
+        self.viz: list[float] | None = None  # current visualisation state
         self.update_viz(reset=True)
+        self.pending_seek_delta_ms = 0  # temporary store for seek deltas
+        self.pending_seek_timestamp = time.time()  # timestamp of the latest seek action
 
         # VLC setup
         self.vlc_instance = vlc.Instance(
@@ -144,27 +146,52 @@ class Player(App):
         while self.vlc_active:
             if self.is_playing:
                 media = self.vlc_player.get_media()
+                # Get current and expected URLs to determine if we need to (re)start
+                # (streamable URLs are cached with a TTL as SoundCloud seems to
+                # update them periodically so they stop working at some point)
                 act_url = media.get_mrl() if media else None
                 exp_url = self.sc_client.get_streamable_link(
                     self.playlist[self.src][self.playlist_idx[self.src]].id
                 )
+                # Get current/total track time
                 current_ms, total_ms = self.get_time_ms()
+
+                # Apply accumulated seek delta if no seek has happened for a while
+                if (
+                    self.pending_seek_delta_ms != 0
+                    and time.time() - self.pending_seek_timestamp > 0.5
+                ):
+                    self.current_time_ms = max(
+                        0,
+                        min(
+                            self.current_time_ms + self.pending_seek_delta_ms, total_ms
+                        ),
+                    )
+                    self.pending_seek_delta_ms = 0
+
+                # (Re)start track if the URL has changed and/or playback needs to
+                # skip to a different time
                 diff = abs(self.current_time_ms - current_ms) / 1000
-                # (Re)start track if the URL has changed and/or the time has been
-                # changed
                 if act_url != exp_url or diff > 3:
                     media = self.vlc_instance.media_new(exp_url)
                     media.add_option(f"start-time={int(self.current_time_ms / 1000)}")
                     self.last_start_time_ms = self.current_time_ms
                     self.vlc_player.set_media(media)
                 self.vlc_player.play()
+
+                # Retrieve new track time
                 current_ms, total_ms = self.get_time_ms()
+
+                # If we're near the end of the track, switch to the next one
                 if total_ms and current_ms / total_ms > 0.999:
                     self.call_from_thread(
                         self.change_track, new_idx=self.playlist_idx[self.src] + 1
                     )
                     continue
+
+                # Update current timekeeping outside of VLC
                 self.current_time_ms = current_ms
+            # Pause track if requested
             elif not self.is_playing and self.vlc_player.is_playing():
                 self.vlc_player.pause()
             time.sleep(0.2)
@@ -214,11 +241,8 @@ class Player(App):
         self.set_time(target_time_ms)
 
     def seek_relative(self, delta_s: int) -> None:
-        current, total = self.get_time_ms()
-        if not total:
-            return
-        target_time_ms = max(0, min(current + delta_s * 1000, total))
-        self.set_time(target_time_ms)
+        self.pending_seek_timestamp = time.time()
+        self.pending_seek_delta_ms += delta_s * 1000
 
     def get_time_ms(self) -> tuple[int, int]:
         current = (self.vlc_player.get_time() or 0) + self.last_start_time_ms

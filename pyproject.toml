@@ -42,4 +42,4 @@ dev = [
 black = "black src/. -C --preview --enable-unstable-feature=string_processing"
 isort = "isort src/."
 mypy = "mypy src/."
-lint = ["black", "isort", "mypy"]
+check = ["black", "isort", "mypy"]
