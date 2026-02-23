@@ -6,6 +6,8 @@ from typing import Any, Generator
 
 import requests
 
+TIMEOUT_S = 3
+
 
 @dataclass
 class Track:
@@ -43,13 +45,13 @@ class SoundCloudClient:
             r"src=\"(https:\/\/a-v2\.sndcdn\.com/assets/[^\.]+\.js)\""
         )
         client_id_regex = re.compile(r"client_id:\"([^\"]+)\"")
-        r = requests.get("https://soundcloud.com")
+        r = requests.get("https://soundcloud.com", timeout=TIMEOUT_S)
         r.raise_for_status()
         matches = assets_script_regex.findall(r.text)
         if not matches:
             raise Exception("Could not generate client ID - no asset scripts found")
         url = matches[-1]
-        r = requests.get(url)
+        r = requests.get(url, timeout=TIMEOUT_S)
         r.raise_for_status()
         client_id = client_id_regex.search(r.text)
         if not client_id:
@@ -57,7 +59,7 @@ class SoundCloudClient:
         self.session.params |= dict(client_id=client_id.group(1))  # type: ignore
 
     def get(self, path: str, **params) -> dict:
-        r = self.session.get(self.base_url + path, params=params)
+        r = self.session.get(self.base_url + path, params=params, timeout=TIMEOUT_S)
         r.raise_for_status()
         return json.loads(r.text)
 
@@ -65,7 +67,9 @@ class SoundCloudClient:
         next_url = None
         while True:
             r = self.session.get(
-                next_url or (self.base_url + path), params=None if next_url else params
+                next_url or (self.base_url + path),
+                params=None if next_url else params,
+                timeout=TIMEOUT_S,
             )
             r.raise_for_status()
             data = r.json()
@@ -89,7 +93,7 @@ class SoundCloudClient:
                 break
         if not transcoding:
             raise Exception("No usable transcoding found.")
-        r = self.session.get(transcoding["url"])
+        r = self.session.get(transcoding["url"], timeout=TIMEOUT_S)
         r.raise_for_status()
         link = r.json()["url"]
         self.streamable_links[track_id] = (link, now)

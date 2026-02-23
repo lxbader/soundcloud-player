@@ -6,7 +6,7 @@ import vlc
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Header, Static
 
 from soundcloud_player.soundcloud_client import SoundCloudClient, Track
 from soundcloud_player.visualisation import print_braille_multiline, update_viz
@@ -61,31 +61,45 @@ class PlayerView(Static):
         # Volume
         content.append(f"🔈 {self.player.vlc_player.audio_get_volume()}% 🔊")
 
+        # Key bindings
+        content.append(
+            "[dim bold orange]spc[/dim bold orange] Play/Pause  "
+            "[dim bold orange]←/→[/dim bold orange] Prev/Next  "
+            "[dim bold orange]↓/↑[/dim bold orange] Volume  "
+            "[dim bold orange],/.[/dim bold orange] Fine Seek  "
+            "[dim bold orange]1-9[/dim bold orange] Relative Seek  "
+            "[dim bold orange]s[/dim bold orange] Shuffle  "
+            "[dim bold orange]a[/dim bold orange] A-Z  "
+            "[dim bold orange]t[/dim bold orange] Likes/Feed  "
+            "[dim bold orange]q[/dim bold orange] Quit"
+        )
+
         self.update("\n\n".join(content))
 
 
 class Player(App):
+    ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
-        ("space", "toggle_play", "Play/Pause"),
-        ("s", "shuffle", "Shuffle"),
-        ("a", "alphabetic_sort", "A-Z Sort"),
-        ("t", "toggle_playlist", "Toggle Likes/Feed"),
-        ("left", "previous_track", "Previous"),
-        ("right", "next_track", "Next"),
-        ("down", "volume_down", "Vol Down"),
-        ("up", "volume_up", "Vol Up"),
-        ("comma", "seek_backward", "<<"),
-        (".", "seek_forward", ">>"),
-        ("1", "seek_10", "10%"),
-        ("2", "seek_20", "20%"),
-        ("3", "seek_30", "30%"),
-        ("4", "seek_40", "40%"),
-        ("5", "seek_50", "50%"),
-        ("6", "seek_60", "60%"),
-        ("7", "seek_70", "70%"),
-        ("8", "seek_80", "80%"),
-        ("9", "seek_90", "90%"),
-        ("q", "quit", "Quit"),
+        ("space", "toggle_play"),
+        ("s", "shuffle"),
+        ("a", "alphabetic_sort"),
+        ("t", "toggle_playlist"),
+        ("left", "previous_track"),
+        ("right", "next_track"),
+        ("down", "volume_down"),
+        ("up", "volume_up"),
+        ("comma", "seek_backward"),
+        (".", "seek_forward"),
+        ("1", "seek_10"),
+        ("2", "seek_20"),
+        ("3", "seek_30"),
+        ("4", "seek_40"),
+        ("5", "seek_50"),
+        ("6", "seek_60"),
+        ("7", "seek_70"),
+        ("8", "seek_80"),
+        ("9", "seek_90"),
+        ("q", "quit"),
     ]
 
     def __init__(self, sc_client: SoundCloudClient, min_track_length_sec: int) -> None:
@@ -127,7 +141,6 @@ class Player(App):
         with Container() as container:
             container.styles.background = "black"
             yield PlayerView(self, id="playlist")
-        yield Footer()
 
     def on_mount(self) -> None:
         self.switch_playlist(self.src)
@@ -144,57 +157,64 @@ class Player(App):
     @work(exclusive=True, thread=True)
     def run_vlc(self) -> None:
         while self.vlc_active:
-            if self.is_playing:
-                media = self.vlc_player.get_media()
-                # Get current and expected URLs to determine if we need to (re)start
-                # (streamable URLs are cached with a TTL as SoundCloud seems to
-                # update them periodically so they stop working at some point)
-                act_url = media.get_mrl() if media else None
-                exp_url = self.sc_client.get_streamable_link(
-                    self.playlist[self.src][self.playlist_idx[self.src]].id
-                )
-                # Get current/total track time
-                current_ms, total_ms = self.get_time_ms()
-
-                # Apply accumulated seek delta if no seek has happened for a while
-                if (
-                    self.pending_seek_delta_ms != 0
-                    and time.time() - self.pending_seek_timestamp > 0.5
-                ):
-                    self.current_time_ms = max(
-                        0,
-                        min(
-                            self.current_time_ms + self.pending_seek_delta_ms, total_ms
-                        ),
+            try:
+                if self.is_playing:
+                    media = self.vlc_player.get_media()
+                    # Get current and expected URLs to determine if we need to (re)start
+                    # (streamable URLs are cached with a TTL as SoundCloud seems to
+                    # update them periodically so they stop working at some point)
+                    act_url = media.get_mrl() if media else None
+                    exp_url = self.sc_client.get_streamable_link(
+                        self.playlist[self.src][self.playlist_idx[self.src]].id
                     )
-                    self.pending_seek_delta_ms = 0
+                    # Get current/total track time
+                    current_ms, total_ms = self.get_time_ms()
 
-                # (Re)start track if the URL has changed and/or playback needs to
-                # skip to a different time
-                diff = abs(self.current_time_ms - current_ms) / 1000
-                if act_url != exp_url or diff > 3:
-                    media = self.vlc_instance.media_new(exp_url)
-                    media.add_option(f"start-time={int(self.current_time_ms / 1000)}")
-                    self.last_start_time_ms = self.current_time_ms
-                    self.vlc_player.set_media(media)
-                self.vlc_player.play()
+                    # Apply accumulated seek delta if no seek has happened for a while
+                    if (
+                        self.pending_seek_delta_ms != 0
+                        and time.time() - self.pending_seek_timestamp > 0.5
+                    ):
+                        self.current_time_ms = max(
+                            0,
+                            min(
+                                self.current_time_ms + self.pending_seek_delta_ms,
+                                total_ms,
+                            ),
+                        )
+                        self.pending_seek_delta_ms = 0
 
-                # Retrieve new track time
-                current_ms, total_ms = self.get_time_ms()
+                    # (Re)start track if the URL has changed and/or playback needs to
+                    # skip to a different time
+                    diff = abs(self.current_time_ms - current_ms) / 1000
+                    if act_url != exp_url or diff > 3:
+                        media = self.vlc_instance.media_new(exp_url)
+                        media.add_option(
+                            f"start-time={int(self.current_time_ms / 1000)}"
+                        )
+                        self.last_start_time_ms = self.current_time_ms
+                        self.vlc_player.set_media(media)
+                    self.vlc_player.play()
 
-                # If we're near the end of the track, switch to the next one
-                if total_ms and current_ms / total_ms > 0.999:
-                    self.call_from_thread(
-                        self.change_track, new_idx=self.playlist_idx[self.src] + 1
-                    )
-                    continue
+                    # Retrieve new track time
+                    current_ms, total_ms = self.get_time_ms()
 
-                # Update current timekeeping outside of VLC
-                self.current_time_ms = current_ms
-            # Pause track if requested
-            elif not self.is_playing and self.vlc_player.is_playing():
-                self.vlc_player.pause()
-            time.sleep(0.2)
+                    # If we're near the end of the track, switch to the next one
+                    if total_ms and current_ms / total_ms > 0.999:
+                        self.call_from_thread(
+                            self.change_track, new_idx=self.playlist_idx[self.src] + 1
+                        )
+                        continue
+
+                    # Update current timekeeping outside of VLC
+                    self.current_time_ms = current_ms
+                # Pause track if requested
+                elif not self.is_playing and self.vlc_player.is_playing():
+                    self.vlc_player.pause()
+                time.sleep(0.2)
+            except Exception as e:
+                self.call_from_thread(self.notify, str(e), severity="error")
+                time.sleep(1)
 
     def switch_playlist(self, source: SRC_LITERAL) -> None:
         self.is_playing = False
