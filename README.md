@@ -1,6 +1,6 @@
 # SoundCloud Player
 
-![Screenshot](screenshot.png)
+![Screenshot](screen.gif)
 
 ## The Problem
 
