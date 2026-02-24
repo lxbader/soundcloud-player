@@ -47,7 +47,11 @@ class PlayerView(Static):
 
         # Visualisation
         self.player.update_viz()
-        content.append(print_braille_multiline(self.player.viz))
+        content.append(
+            "[bold orange]"
+            + print_braille_multiline(self.player.viz)
+            + "[/bold orange]"
+        )
 
         # Time
         current, total = self.player.get_time_ms()
@@ -61,24 +65,35 @@ class PlayerView(Static):
         # Volume
         content.append(f"🔈 {self.player.vlc_player.audio_get_volume()}% 🔊")
 
-        # Key bindings
-        content.append(
-            "[dim bold orange]spc[/dim bold orange] Play/Pause  "
-            "[dim bold orange]←/→[/dim bold orange] Prev/Next  "
-            "[dim bold orange]↓/↑[/dim bold orange] Volume  "
-            "[dim bold orange],/.[/dim bold orange] Fine Seek  "
-            "[dim bold orange]1-9[/dim bold orange] Relative Seek  "
-            "[dim bold orange]s[/dim bold orange] Shuffle  "
-            "[dim bold orange]a[/dim bold orange] A-Z  "
-            "[dim bold orange]t[/dim bold orange] Likes/Feed  "
-            "[dim bold orange]q[/dim bold orange] Quit"
-        )
-
         self.update("\n\n".join(content))
+
+
+KEYBINDINGS_BAR = (
+    "[dim bold orange]spc[/dim bold orange] Play/Pause  "
+    "[dim bold orange]←/→[/dim bold orange] Prev/Next  "
+    "[dim bold orange]↓/↑[/dim bold orange] Volume  "
+    "[dim bold orange],/.[/dim bold orange] Fine Seek  "
+    "[dim bold orange]1-9[/dim bold orange] Relative Seek  "
+    "[dim bold orange]s[/dim bold orange] Shuffle  "
+    "[dim bold orange]a[/dim bold orange] A-Z  "
+    "[dim bold orange]t[/dim bold orange] Likes/Feed  "
+    "[dim bold orange]q[/dim bold orange] Quit"
+)
 
 
 class Player(App):
     ENABLE_COMMAND_PALETTE = False
+    CSS = """
+    Header {
+        background: #0f3460;
+    }
+    #keybindings {
+        dock: bottom;
+        height: 1;
+        text-align: center;
+        background: #0f3460;
+    }
+    """
     BINDINGS = [
         ("space", "toggle_play"),
         ("s", "shuffle"),
@@ -138,6 +153,7 @@ class Player(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield Static(KEYBINDINGS_BAR, id="keybindings")
         with Container() as container:
             container.styles.background = "black"
             yield PlayerView(self, id="playlist")
