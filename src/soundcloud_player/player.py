@@ -3,96 +3,123 @@ from random import shuffle
 from typing import Generator, Literal
 
 import vlc
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Container
+from textual.widget import Widget
 from textual.widgets import Header, Static
 
+from soundcloud_player.background import Background, Starfield
 from soundcloud_player.soundcloud_client import SoundCloudClient, Track
 from soundcloud_player.visualisation import print_braille_multiline, update_viz
 
 SRC_LITERAL = Literal["likes", "feed"]
 NAV_WIDTH = 40
 N_ITEMS = 9
+YELLOW = "#FFD700"
+BLUE = "#0F3460"
+BRIGHT_BLUE = "#2563EB"
 
 
-class PlayerView(Static):
+class PlayerView(Widget):
     def __init__(self, player, **kwargs) -> None:
         super().__init__(**kwargs)
         self.player = player
-        self.styles.height = "auto"
-        self.styles.margin = 1
-        self.styles.text_align = "center"
+        self.background: Background = Starfield()
 
-    def update_view(self) -> None:
-        content = []
+    def on_resize(self) -> None:
+        w, h = self.size.width, self.size.height
+        if w and h:
+            self.background.resize(w, h)
+
+    def _build_content_lines(self) -> list[Text]:
+        lines: list[str] = [""]
 
         # Playlist
-        playlist = []
         start = max(self.player.playlist_idx[self.player.src] - N_ITEMS // 2, 0)
         for i in range(start, start + N_ITEMS):
             if i < 0 or i >= len(self.player.playlist[self.player.src]):
-                playlist.append("")
+                lines.append("")
                 continue
             track = self.player.playlist[self.player.src][i]
-            title_str = f"[orange]{i + 1}[/orange] {fmt_track(track)}"
+            title_str = f"[{YELLOW}]{i + 1}[/{YELLOW}] {fmt_track(track)}"
             if i == self.player.playlist_idx[self.player.src]:
                 title_str = f"[bold]{title_str}[/bold]"
             else:
                 title_str = f"[dim]{title_str}[/dim]"
             if self.player.liked_track_ids and track.id in self.player.liked_track_ids:
-                title_str = title_str + " [blue](Liked)[/blue]"
-            playlist.append(title_str)
-        content.append("\n".join(playlist))
+                title_str = title_str + f" [{BRIGHT_BLUE}](Liked)[/{BRIGHT_BLUE}]"
+            lines.append(title_str)
+        lines.append("")
 
         # Visualisation
-        self.player.update_viz()
-        content.append(
-            "[bold orange]"
+        lines.append(
+            f"[bold {BRIGHT_BLUE}]"
             + print_braille_multiline(self.player.viz)
-            + "[/bold orange]"
+            + f"[/bold {BRIGHT_BLUE}]"
         )
+        lines.append("")
 
         # Time
         current, total = self.player.get_time_ms()
-        max_blocks = NAV_WIDTH - 1  # knob takes 1 char
+        max_blocks = NAV_WIDTH - 1
         prog_blocks = round(current / total * max_blocks) if total else 0
         prog_line = "[bold]" + fmt_time(current) + "[/bold] [dim]"
         prog_line += "─" * prog_blocks + "█" + "─" * (max_blocks - prog_blocks)
         prog_line += "[/dim] [bold]" + fmt_time(total) + "[/bold]"
-        content.append(prog_line)
+        lines.append(prog_line)
+        lines.append("")
 
         # Volume
-        content.append(f"🔈 {self.player.vlc_player.audio_get_volume()}% 🔊")
+        lines.append(f"🔈  {self.player.vlc_player.audio_get_volume()}% 🔊")
+        lines.append("")
 
-        self.update("\n\n".join(content))
+        # Convert to Text lines
+        content: list[Text] = [Text.from_markup(raw) for raw in lines]
+        return content
+
+    def update_view(self) -> None:
+        self.player.update_viz()
+        self.refresh()
+
+    def render(self) -> Text:
+        w, h = self.size.width, self.size.height
+        if not w or not h:
+            return Text("")
+        return self.background.render(self._build_content_lines(), w, h)
 
 
-KEYBINDINGS_BAR = (
-    "[dim bold orange]spc[/dim bold orange] Play/Pause  "
-    "[dim bold orange]←/→[/dim bold orange] Prev/Next  "
-    "[dim bold orange]↓/↑[/dim bold orange] Volume  "
-    "[dim bold orange],/.[/dim bold orange] Fine Seek  "
-    "[dim bold orange]1-9[/dim bold orange] Relative Seek  "
-    "[dim bold orange]s[/dim bold orange] Shuffle  "
-    "[dim bold orange]a[/dim bold orange] A-Z  "
-    "[dim bold orange]t[/dim bold orange] Likes/Feed  "
-    "[dim bold orange]q[/dim bold orange] Quit"
-)
+KEYS = [
+    ("spc", "Play/Pause"),
+    ("←/→", "Prev/Next"),
+    ("↓/↑", "Volume"),
+    (",/.", "Fine Seek"),
+    ("1-9", "Relative Seek"),
+    ("s", "Shuffle"),
+    ("a", "A-Z"),
+    ("t", "Likes/Feed"),
+    ("q", "Quit"),
+]
 
 
 class Player(App):
     ENABLE_COMMAND_PALETTE = False
-    CSS = """
-    Header {
-        background: #0f3460;
-    }
-    #keybindings {
+    CSS = f"""
+    Header {{
+        background: {BLUE};
+    }}
+    #keybindings {{
         dock: bottom;
         height: 1;
         text-align: center;
-        background: #0f3460;
-    }
+        background: {BLUE};
+    }}
+    #playlist {{
+        width: 100%;
+        height: 1fr;
+        background: black;
+    }}
     """
     BINDINGS = [
         ("space", "toggle_play"),
@@ -153,9 +180,9 @@ class Player(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static(KEYBINDINGS_BAR, id="keybindings")
-        with Container() as container:
-            container.styles.background = "black"
+        keys = " ".join(f"[{YELLOW}]" + i + f"[/{YELLOW}] " + j for i, j in KEYS)
+        yield Static(keys, id="keybindings")
+        with Container():
             yield PlayerView(self, id="playlist")
 
     def on_mount(self) -> None:
@@ -216,7 +243,7 @@ class Player(App):
                     current_ms, total_ms = self.get_time_ms()
 
                     # If we're near the end of the track, switch to the next one
-                    if total_ms and current_ms / total_ms > 0.999:
+                    if total_ms and total_ms - current_ms < 0.5:
                         self.call_from_thread(
                             self.change_track, new_idx=self.playlist_idx[self.src] + 1
                         )
