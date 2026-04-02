@@ -2,6 +2,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from random import shuffle
 from typing import Any, Generator
 
 import requests
@@ -39,6 +40,7 @@ class SoundCloudClient:
         self.update_client_id()
         self.user_id = self.get("me")["id"]
         self.streamable_links: dict[int, tuple[str, float]] = {}
+        self.liked_track_ids = self.update_liked_track_ids()
 
     def update_client_id(self) -> None:
         assets_script_regex = re.compile(
@@ -58,20 +60,26 @@ class SoundCloudClient:
             raise Exception(f"Could not find client_id in script '{url}'")
         self.session.params |= dict(client_id=client_id.group(1))  # type: ignore
 
+    def _get_with_backoff(self, url: str, **kwargs) -> requests.Response:
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            r = self.session.get(url, timeout=TIMEOUT_S, **kwargs)
+            if r.ok or attempt == max_retries:
+                r.raise_for_status()
+                return r
+            time.sleep(0.5 * (2**attempt))
+        return r
+
     def get(self, path: str, **params) -> dict:
-        r = self.session.get(self.base_url + path, params=params, timeout=TIMEOUT_S)
-        r.raise_for_status()
+        r = self._get_with_backoff(self.base_url + path, params=params)
         return json.loads(r.text)
 
     def get_collection(self, path: str, **params) -> Generator[Any]:
         next_url = None
         while True:
-            r = self.session.get(
-                next_url or (self.base_url + path),
-                params=None if next_url else params,
-                timeout=TIMEOUT_S,
+            r = self._get_with_backoff(
+                next_url or (self.base_url + path), params=None if next_url else params
             )
-            r.raise_for_status()
             data = r.json()
             for resource in data["collection"]:
                 yield resource
@@ -99,18 +107,21 @@ class SoundCloudClient:
         self.streamable_links[track_id] = (link, now)
         return link
 
-    def get_liked_track_ids(self) -> set[int]:
-        return set(self.get_collection("me/track_likes/ids"))
+    def update_liked_track_ids(self, first: int | None = None) -> list[int]:
+        all_likes = list(self.get_collection("me/track_likes/ids"))
+        shuffle(all_likes)
+        if first:
+            all_likes = [first] + [l for l in all_likes if l != first]
+        return all_likes
 
     def get_liked_tracks(self) -> Generator[Track]:
-        for t in self.get_collection(f"users/{self.user_id}/likes"):
-            if "track" not in t:
-                continue
+        for track_id in self.liked_track_ids:
+            t = self.get(f"tracks/{track_id}")
             yield Track(
-                id=t["track"]["id"],
-                title=t["track"]["title"],
-                artist=t["track"]["user"]["username"],
-                duration_secs=t["track"]["duration"] / 1000,
+                id=t["id"],
+                title=t["title"],
+                artist=t["user"]["username"],
+                duration_secs=t["duration"] / 1000,
             )
 
     def get_feed(self, min_track_length_sec: int) -> Generator[Track]:

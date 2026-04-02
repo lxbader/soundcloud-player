@@ -48,7 +48,10 @@ class PlayerView(Widget):
                 title_str = f"[bold]{title_str}[/bold]"
             else:
                 title_str = f"[dim]{title_str}[/dim]"
-            if self.player.liked_track_ids and track.id in self.player.liked_track_ids:
+            if (
+                self.player.sc_client.liked_track_ids
+                and track.id in self.player.sc_client.liked_track_ids
+            ):
                 title_str = title_str + f" [{BRIGHT_BLUE}](Liked)[/{BRIGHT_BLUE}]"
             lines.append(title_str)
         lines.append("")
@@ -156,7 +159,6 @@ class Player(App):
         }
         self.playlist: dict[SRC_LITERAL, list[Track]] = {"likes": [], "feed": []}
         self.playlist_idx: dict[SRC_LITERAL, int] = {"likes": 0, "feed": 0}
-        self.liked_track_ids = self.sc_client.get_liked_track_ids()
 
         # Set initial state
         self.src: SRC_LITERAL = "feed"  # which playlist to show/play
@@ -328,6 +330,8 @@ class Player(App):
             self.play()
 
     def action_shuffle(self) -> None:
+        if self.src == "likes":
+            return  # TODO
         start = self.playlist[self.src][self.playlist_idx[self.src]]
         rest = (
             self.playlist[self.src][: self.playlist_idx[self.src]]
