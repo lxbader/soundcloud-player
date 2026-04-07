@@ -1,11 +1,13 @@
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from random import shuffle
 from typing import Any, Generator
 
 import requests
+from requests import HTTPError
 
 TIMEOUT_S = 3
 
@@ -40,7 +42,8 @@ class SoundCloudClient:
         self.update_client_id()
         self.user_id = self.get("me")["id"]
         self.streamable_links: dict[int, tuple[str, float]] = {}
-        self.liked_track_ids = self.update_liked_track_ids()
+        self.liked_track_ids: list[int] = []
+        self.update_liked_track_ids()
 
     def update_client_id(self) -> None:
         assets_script_regex = re.compile(
@@ -107,22 +110,36 @@ class SoundCloudClient:
         self.streamable_links[track_id] = (link, now)
         return link
 
-    def update_liked_track_ids(self, first: int | None = None) -> list[int]:
+    def update_liked_track_ids(self, first: int | None = None) -> None:
         all_likes = list(self.get_collection("me/track_likes/ids"))
         shuffle(all_likes)
         if first:
             all_likes = [first] + [l for l in all_likes if l != first]
-        return all_likes
+        self.liked_track_ids = all_likes
+
+    def _maybe_get_track(self, track_id: int) -> Track | None:
+        try:
+            t = self.get(f"tracks/{track_id}")
+        except HTTPError:
+            # Soundcloud seems to keep liked track IDs even when tracks do not
+            # exist anymore?
+            return None
+        return Track(
+            id=t["id"],
+            title=t["title"],
+            artist=t["user"]["username"],
+            duration_secs=t["duration"] / 1000,
+        )
 
     def get_liked_tracks(self) -> Generator[Track]:
-        for track_id in self.liked_track_ids:
-            t = self.get(f"tracks/{track_id}")
-            yield Track(
-                id=t["id"],
-                title=t["title"],
-                artist=t["user"]["username"],
-                duration_secs=t["duration"] / 1000,
-            )
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(self._maybe_get_track, track_id)
+                for track_id in self.liked_track_ids
+            ]
+            for future in as_completed(futures):
+                if (out := future.result()) is not None:
+                    yield out
 
     def get_feed(self, min_track_length_sec: int) -> Generator[Track]:
         seen = set()
