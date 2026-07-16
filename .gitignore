@@ -197,3 +197,4 @@ cython_debug/
 .aider*
 .envrc
 personal_config/
+.DS_Store

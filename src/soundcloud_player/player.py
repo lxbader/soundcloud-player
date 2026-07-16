@@ -204,6 +204,11 @@ class Player(App):
         while self.vlc_active:
             try:
                 if self.is_playing:
+                    if not self.playlist[self.src]:
+                        # No tracks loaded yet (e.g. a network failure during
+                        # load). Wait instead of indexing into an empty list.
+                        time.sleep(0.2)
+                        continue
                     media = self.vlc_player.get_media()
                     # Get current and expected URLs to determine if we need to (re)start
                     # (streamable URLs are cached with a TTL as SoundCloud seems to
@@ -281,15 +286,19 @@ class Player(App):
         self.current_time_ms = time_ms
 
     def change_track(self, new_idx: int) -> None:
-        self.playlist_idx[self.src] = new_idx
         if (missing := new_idx + N_ITEMS - len(self.playlist[self.src])) > 0:
             self.expand_current_playlist(count=missing)
+        playlist = self.playlist[self.src]
+        if not playlist:
+            # No playlist available, just don't do anything
+            return
+        # Do not go past the end of the playlist, if it has an end for some reason
+        self.playlist_idx[self.src] = max(0, min(new_idx, len(playlist) - 1))
         self.current_time_ms = 0
         self.update_viz(reset=True)
         self.update_display()
         self.sub_title = (
-            "Now Playing:"
-            f" {fmt_track(self.playlist[self.src][self.playlist_idx[self.src]])}"
+            f"Now Playing: {fmt_track(playlist[self.playlist_idx[self.src]])}"
         )
 
     def play(self) -> None:
