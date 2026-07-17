@@ -92,6 +92,7 @@ def organise_library(
             mp3file = MP3(file, ID3=EasyID3)
             mp3file["title"] = file.stem
             mp3file["album"] = prefix + match.album
+            mp3file["artist"] = match.phrase or "<>"
             mp3file.save()
             progress.update(task, advance=1)
 
