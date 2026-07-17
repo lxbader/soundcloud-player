@@ -31,7 +31,19 @@ def create_parser():
 
     parser_organise = subparsers.add_parser("organise")
     parser_organise.set_defaults(func=organise_library)
-    parser_organise.add_argument("--prefix", "-p", help="Album prefix", type=str)
+    parser_organise.add_argument(
+        "--prefix", "-p", help="Album prefix", type=str, default="SC - "
+    )
+    parser_organise.add_argument(
+        "--keep-recent",
+        "-k",
+        help=(
+            "Keep only the N most recently uploaded tracks in their normal "
+            "folders; sort everything older into an OLD folder"
+        ),
+        type=int,
+        default=150,
+    )
     return parser
 
 
