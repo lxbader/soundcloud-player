@@ -62,7 +62,7 @@ class SoundCloudClient:
         }
         self.update_client_id()
         self.user_id = self.get("me")["id"]
-        self.streamable_links: dict[int, tuple[str, float]] = {}
+        self.streamable_links: dict[int, tuple[str, str, float]] = {}
         self.liked_track_ids: list[int] = []
         self.update_liked_track_ids()
 
@@ -107,24 +107,30 @@ class SoundCloudClient:
             if not next_url:
                 break
 
-    def get_streamable_link(self, track_id: int) -> str:
+    def get_streamable_link(self, track_id: int) -> tuple[str, str]:
+        """Return a streamable link and its audio file extension ("m4a" or "mp3")."""
         now = time.time()
         if cached := self.streamable_links.get(track_id, None):
-            link, from_time = cached
+            link, ext, from_time = cached
             if now - from_time < 3600:
-                return link
+                return link, ext
         track = self.get(f"tracks/{track_id}")
-        transcoding = None
-        for t in track["media"]["transcodings"]:
-            if "mp3" in t["preset"] and t["format"]["protocol"] == "hls":
-                transcoding = t
-                break
-        if not transcoding:
+        # SoundCloud seems to be phasing out MP3
+        preference = (("aac_160k", "m4a"), ("mp3", "mp3"), ("aac_96k", "m4a"))
+        candidates = [
+            (rank, t, ext)
+            for t in track["media"]["transcodings"]
+            if t["format"]["protocol"] == "hls"
+            for rank, (preset, ext) in enumerate(preference)
+            if preset in t["preset"]
+        ]
+        if not candidates:
             raise Exception("No usable transcoding found.")
+        _, transcoding, ext = min(candidates, key=lambda c: c[0])
         r = self._get_with_backoff(transcoding["url"])
         link = r.json()["url"]
-        self.streamable_links[track_id] = (link, now)
-        return link
+        self.streamable_links[track_id] = (link, ext, now)
+        return link, ext
 
     def update_liked_track_ids(self, first: int | None = None) -> None:
         all_likes = list(self.get_collection("me/track_likes/ids"))

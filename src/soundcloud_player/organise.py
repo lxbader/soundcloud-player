@@ -1,11 +1,9 @@
 import argparse
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import mutagen
 import yaml
-from mutagen.easyid3 import EasyID3
-from mutagen.mp3 import MP3
 from rich import print
 from rich.console import Console
 from rich.progress import (
@@ -20,6 +18,7 @@ from thefuzz import fuzz  # type: ignore
 from unidecode import unidecode
 
 from soundcloud_player.config_manager import ConfigManager
+from soundcloud_player.download import audio_files, track_id
 from soundcloud_player.soundcloud_client import SoundCloudClient
 
 SIM_LIMIT = 90
@@ -45,11 +44,6 @@ class MatchResult:
         max_diff = 100 - SIM_LIMIT
         colour = COLOURS[int((diff * (len(COLOURS) - 1) / max_diff) // 1)]
         return f"[{colour}]{self.similarity}[/{colour}]"
-
-
-def track_id(track: Path) -> int | None:
-    match = re.search(r"_([0-9]+)\.mp3$", track.name)
-    return int(match.group(1)) if match else None
 
 
 def find_best_match(track: Path, all_configs: list[TrackGroup]) -> MatchResult:
@@ -84,7 +78,7 @@ def organise_library(
 
     # Find album for all tracks
     results: dict[Path, MatchResult] = {
-        track: find_best_match(track, all_configs) for track in lib_path.rglob("*.mp3")
+        track: find_best_match(track, all_configs) for track in audio_files(lib_path)
     }
 
     # Route everything but the N most recently uploaded tracks into OLD,
@@ -98,7 +92,7 @@ def organise_library(
         for old_track in by_recency[args.keep_recent :]:
             results[old_track].album = OLD
 
-    # Edit mp3 tags
+    # Edit audio tags
     prefix = args.prefix or ""
     with Progress(
         TextColumn("[white]{task.description}[/white]"),
@@ -106,13 +100,15 @@ def organise_library(
         TaskProgressColumn(text_format="[white]{task.percentage:>3.0f}%[/white]"),
         TimeElapsedColumn(),
     ) as progress:
-        task = progress.add_task("Applying mp3 tags", total=len(results))
+        task = progress.add_task("Applying audio tags", total=len(results))
         for file, match in results.items():
-            mp3file = MP3(file, ID3=EasyID3)
-            mp3file["title"] = file.stem
-            mp3file["album"] = prefix + match.album
-            mp3file["artist"] = match.phrase or "<>"
-            mp3file.save()
+            audio = mutagen.File(file, easy=True)
+            if audio.tags is None:
+                audio.add_tags()
+            audio["title"] = file.stem
+            audio["album"] = prefix + match.album
+            audio["artist"] = match.phrase or "<>"
+            audio.save()
             progress.update(task, advance=1)
 
     # Reorganise folders

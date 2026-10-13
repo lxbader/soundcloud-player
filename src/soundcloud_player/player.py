@@ -164,6 +164,7 @@ class Player(App):
         self.src: SRC_LITERAL = "feed"  # which playlist to show/play
         self.current_time_ms = 0  # track time in ms from the start of the track
         self.last_start_time_ms = 0  # offset with which the track was last started
+        self.seek_settle_until = 0.0  # VLC reports stale times briefly after seeking
         self.is_playing = True  # whether the player is currently playing or paused
         self.viz: list[float] | None = None  # current visualisation state
         self.update_viz(reset=True)
@@ -214,7 +215,7 @@ class Player(App):
                     # (streamable URLs are cached with a TTL as SoundCloud seems to
                     # update them periodically so they stop working at some point)
                     act_url = media.get_mrl() if media else None
-                    exp_url = self.sc_client.get_streamable_link(
+                    exp_url, ext = self.sc_client.get_streamable_link(
                         self.playlist[self.src][self.playlist_idx[self.src]].id
                     )
                     # Get current/total track time
@@ -235,15 +236,23 @@ class Player(App):
                         self.pending_seek_delta_ms = 0
 
                     # (Re)start track if the URL has changed and/or playback needs to
-                    # skip to a different time
+                    # skip to a different time. VLC can't seek within MP3 streams, so
+                    # those restart from an offset, after which VLC's clock starts at
+                    # 0. AAC streams seek in place and VLC's clock stays absolute.
                     diff = abs(self.current_time_ms - current_ms) / 1000
-                    if act_url != exp_url or diff > 3:
+                    if act_url != exp_url or (diff > 3 and ext == "mp3"):
                         media = self.vlc_instance.media_new(exp_url)
                         media.add_option(
                             f"start-time={int(self.current_time_ms / 1000)}"
                         )
-                        self.last_start_time_ms = self.current_time_ms
+                        self.last_start_time_ms = (
+                            self.current_time_ms if ext == "mp3" else 0
+                        )
                         self.vlc_player.set_media(media)
+                        self.seek_settle_until = time.time() + 1.5
+                    elif diff > 3:
+                        self.vlc_player.set_time(self.current_time_ms)
+                        self.seek_settle_until = time.time() + 1.5
                     self.vlc_player.play()
 
                     # Retrieve new track time
@@ -319,8 +328,10 @@ class Player(App):
         self.pending_seek_delta_ms += delta_s * 1000
 
     def get_time_ms(self) -> tuple[int, int]:
-        current = (self.vlc_player.get_time() or 0) + self.last_start_time_ms
         total = self.vlc_player.get_length() or 0
+        if time.time() < self.seek_settle_until:
+            return self.current_time_ms, total
+        current = (self.vlc_player.get_time() or 0) + self.last_start_time_ms
         return current, total
 
     def update_viz(self, reset: bool = False):

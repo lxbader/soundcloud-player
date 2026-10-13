@@ -24,19 +24,31 @@ def sanitise_string(s: str) -> str:
     return re.sub(r"\W+", "_", unicodedata.normalize("NFC", str.lower(s))).strip("_")
 
 
+AUDIO_EXTENSIONS = (".mp3", ".m4a")
+
+
+def audio_files(lib_path: Path) -> list[Path]:
+    return [p for p in lib_path.rglob("*") if p.suffix in AUDIO_EXTENSIONS]
+
+
+def track_id(track: Path) -> int | None:
+    match = re.search(r"_([0-9]+)\.(?:mp3|m4a)$", track.name)
+    return int(match.group(1)) if match else None
+
+
 def download_track(
     track: Track, sc_client: SoundCloudClient, dst_path: Path, progress: Progress
 ) -> Path:
-    url = sc_client.get_streamable_link(track_id=track.id)
+    url, ext = sc_client.get_streamable_link(track_id=track.id)
     title = sanitise_string(track.title)
     artist = sanitise_string(track.artist)
     artist = "" if artist in title else artist + "_"
-    filename = artist + title + "_" + str(track.id) + ".mp3"
+    filename = artist + title + "_" + str(track.id) + "." + ext
     output_path = dst_path / filename
 
     task = progress.add_task(filename, total=track.duration_secs)
     with tempfile.TemporaryDirectory() as tmpdir:
-        temp_path = Path(tmpdir).joinpath("scdl-download.mp3").absolute()
+        temp_path = Path(tmpdir).joinpath("scdl-download." + ext).absolute()
         with subprocess.Popen(
             [
                 "ffmpeg",
@@ -69,12 +81,9 @@ def download_likes(
     sc_client: SoundCloudClient, args: argparse.Namespace, cfg_manager: ConfigManager
 ):
     dst_path = cfg_manager.get_local_lib()
-    all_mp3s = list(dst_path.rglob("*.mp3"))
-    all_track_ids = []
-    for file in all_mp3s:
-        matches = re.findall(r"_([0-9]+)\.mp3", str(file.name))
-        if matches:
-            all_track_ids.append(int(matches[0]))
+    all_track_ids = [
+        tid for file in audio_files(dst_path) if (tid := track_id(file)) is not None
+    ]
     with Progress(
         TextColumn("[white]{task.description}[/white]"),
         BarColumn(),
