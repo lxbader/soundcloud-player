@@ -75,7 +75,7 @@ class PlayerView(Widget):
         lines.append("")
 
         # Volume
-        lines.append(f"🔈  {self.player.vlc_player.audio_get_volume()}% 🔊")
+        lines.append(f"🔈  {self.player.volume}% 🔊")
         lines.append("")
 
         # Convert to Text lines
@@ -160,16 +160,18 @@ class Player(App):
         self.playlist: dict[SRC_LITERAL, list[Track]] = {"likes": [], "feed": []}
         self.playlist_idx: dict[SRC_LITERAL, int] = {"likes": 0, "feed": 0}
 
-        # Set initial state
+        # Set initial state. Only the run_vlc thread talks to VLC, as VLC calls can
+        # block for a long time (e.g. while dropping a stalled stream), so the UI sets
+        # what it wants here and reads back the position VLC last reported.
         self.src: SRC_LITERAL = "feed"  # which playlist to show/play
-        self.current_time_ms = 0  # track time in ms from the start of the track
-        self.last_start_time_ms = 0  # offset with which the track was last started
-        self.seek_settle_until = 0.0  # VLC reports stale times briefly after seeking
         self.is_playing = True  # whether the player is currently playing or paused
+        self.volume = 70
+        self.seek_request_ms: int | None = None  # seek not yet passed on to VLC
+        self.loaded_track_id: int | None = None  # track currently loaded into VLC
+        self.time_ms = 0  # playback position, also where to resume a dead stream
+        self.seek_shown_until = 0.0  # VLC reports stale times briefly after seeking
         self.viz: list[float] | None = None  # current visualisation state
         self.update_viz(reset=True)
-        self.pending_seek_delta_ms = 0  # temporary store for seek deltas
-        self.pending_seek_timestamp = time.time()  # timestamp of the latest seek action
 
         # VLC setup
         self.vlc_instance = vlc.Instance(
@@ -178,7 +180,6 @@ class Player(App):
         )
         self.vlc_instance.log_unset()
         self.vlc_player = self.vlc_instance.media_player_new()
-        self.vlc_player.audio_set_volume(70)
         self.vlc_active = True
 
     def compose(self) -> ComposeResult:
@@ -204,79 +205,70 @@ class Player(App):
     def run_vlc(self) -> None:
         while self.vlc_active:
             try:
-                if self.is_playing:
-                    if not self.playlist[self.src]:
-                        # No tracks loaded yet (e.g. a network failure during
-                        # load). Wait instead of indexing into an empty list.
-                        time.sleep(0.2)
-                        continue
-                    media = self.vlc_player.get_media()
-                    # Get current and expected URLs to determine if we need to (re)start
-                    # (streamable URLs are cached with a TTL as SoundCloud seems to
-                    # update them periodically so they stop working at some point)
-                    act_url = media.get_mrl() if media else None
-                    exp_url, ext = self.sc_client.get_streamable_link(
-                        self.playlist[self.src][self.playlist_idx[self.src]].id
-                    )
-                    # Get current/total track time
-                    current_ms, total_ms = self.get_time_ms()
-
-                    # Apply accumulated seek delta if no seek has happened for a while
-                    if (
-                        self.pending_seek_delta_ms != 0
-                        and time.time() - self.pending_seek_timestamp > 0.5
-                    ):
-                        self.current_time_ms = max(
-                            0,
-                            min(
-                                self.current_time_ms + self.pending_seek_delta_ms,
-                                total_ms,
-                            ),
-                        )
-                        self.pending_seek_delta_ms = 0
-
-                    # (Re)start track if the URL has changed and/or playback needs to
-                    # skip to a different time. VLC can't seek within MP3 streams, so
-                    # those restart from an offset, after which VLC's clock starts at
-                    # 0. AAC streams seek in place and VLC's clock stays absolute.
-                    diff = abs(self.current_time_ms - current_ms) / 1000
-                    if act_url != exp_url or (diff > 3 and ext == "mp3"):
-                        media = self.vlc_instance.media_new(exp_url)
-                        media.add_option(
-                            f"start-time={int(self.current_time_ms / 1000)}"
-                        )
-                        self.last_start_time_ms = (
-                            self.current_time_ms if ext == "mp3" else 0
-                        )
-                        self.vlc_player.set_media(media)
-                        self.seek_settle_until = time.time() + 1.5
-                    elif diff > 3:
-                        self.vlc_player.set_time(self.current_time_ms)
-                        self.seek_settle_until = time.time() + 1.5
-                    self.vlc_player.play()
-
-                    # Retrieve new track time
-                    current_ms, total_ms = self.get_time_ms()
-
-                    # If we're near the end of the track, switch to the next one
-                    if total_ms and total_ms - current_ms < 0.5:
-                        self.call_from_thread(
-                            self.change_track, new_idx=self.playlist_idx[self.src] + 1
-                        )
-                        continue
-
-                    # Update current timekeeping outside of VLC
-                    self.current_time_ms = current_ms
-                # Pause track if requested
-                elif not self.is_playing and self.vlc_player.is_playing():
-                    self.vlc_player.pause()
-                time.sleep(0.2)
+                self.sync_vlc()
             except Exception as e:
                 self.call_from_thread(self.notify, str(e), severity="error")
                 time.sleep(1)
+            time.sleep(0.2)
+
+    def sync_vlc(self) -> None:
+        """Bring VLC in line with what the UI asked for and read back its position.
+
+        VLC is the source of truth for the playback position; this only passes on
+        requests, loads tracks and recovers streams that stopped.
+        """
+        if not self.playlist[self.src]:
+            # No tracks loaded yet (e.g. a network failure during load)
+            return
+        track = self.playlist[self.src][self.playlist_idx[self.src]]
+        if track.id != self.loaded_track_id:
+            self.load_track(track.id, start_ms=0)
+
+        if self.vlc_player.audio_get_volume() != self.volume:
+            self.vlc_player.audio_set_volume(self.volume)
+
+        state = self.vlc_player.get_state()
+        if state in (vlc.State.Ended, vlc.State.Error):
+            if track.duration_secs * 1000 - self.time_ms < 5000:
+                self.call_from_thread(
+                    self.change_track, new_idx=self.playlist_idx[self.src] + 1
+                )
+            else:
+                # The stream died mid-track, e.g. its links expired during a long
+                # pause. Reload it with a fresh link from where it stopped.
+                self.sc_client.streamable_links.pop(track.id, None)
+                self.load_track(track.id, start_ms=self.time_ms)
+            return
+
+        if self.is_playing and state in (
+            vlc.State.NothingSpecial,
+            vlc.State.Stopped,
+            vlc.State.Paused,
+        ):
+            self.vlc_player.play()
+        elif not self.is_playing and state == vlc.State.Playing:
+            self.vlc_player.pause()
+
+        if state in (vlc.State.Playing, vlc.State.Paused):
+            if (seek_ms := self.seek_request_ms) is not None:
+                self.seek_request_ms = None
+                self.vlc_player.set_time(seek_ms)
+                # Right after a seek, VLC briefly reports the start of the HLS chunk
+                self.seek_shown_until = time.time() + 1
+            elif time.time() > self.seek_shown_until:
+                # VLC reports 0 while a stream is opening, so keep the old position
+                if (time_ms := self.vlc_player.get_time()) > 0:
+                    self.time_ms = time_ms
+
+    def load_track(self, track_id: int, start_ms: int) -> None:
+        url, _ = self.sc_client.get_streamable_link(track_id)
+        media = self.vlc_instance.media_new(url)
+        # HLS streams start at the beginning of the chunk containing this time
+        media.add_option(f"start-time={start_ms // 1000}")
+        self.vlc_player.set_media(media)
+        self.loaded_track_id = track_id
 
     def switch_playlist(self, source: SRC_LITERAL) -> None:
-        self.is_playing = False
         self.src = source
         if not self.playlist[source]:
             self.expand_current_playlist(count=N_ITEMS)
@@ -291,9 +283,6 @@ class Player(App):
         ]
         self.playlist[self.src].extend(new_items)
 
-    def set_time(self, time_ms):
-        self.current_time_ms = time_ms
-
     def change_track(self, new_idx: int) -> None:
         if (missing := new_idx + N_ITEMS - len(self.playlist[self.src])) > 0:
             self.expand_current_playlist(count=missing)
@@ -303,7 +292,9 @@ class Player(App):
             return
         # Do not go past the end of the playlist, if it has an end for some reason
         self.playlist_idx[self.src] = max(0, min(new_idx, len(playlist) - 1))
-        self.current_time_ms = 0
+        self.loaded_track_id = None  # (re)load even if the index didn't change
+        self.time_ms = 0
+        self.seek_request_ms = None
         self.update_viz(reset=True)
         self.update_display()
         self.sub_title = (
@@ -316,23 +307,23 @@ class Player(App):
     def pause(self) -> None:
         self.is_playing = False
 
+    def seek_to_ms(self, target_ms: int) -> None:
+        _, total = self.get_time_ms()
+        self.time_ms = self.seek_request_ms = max(0, min(target_ms, total))
+
     def seek_to_fraction(self, fraction: float) -> None:
         _, total = self.get_time_ms()
-        if not total:
-            return
-        target_time_ms = int(fraction * total)
-        self.set_time(target_time_ms)
+        self.seek_to_ms(int(fraction * total))
 
     def seek_relative(self, delta_s: int) -> None:
-        self.pending_seek_timestamp = time.time()
-        self.pending_seek_delta_ms += delta_s * 1000
+        current, _ = self.get_time_ms()
+        self.seek_to_ms(current + delta_s * 1000)
 
     def get_time_ms(self) -> tuple[int, int]:
-        total = self.vlc_player.get_length() or 0
-        if time.time() < self.seek_settle_until:
-            return self.current_time_ms, total
-        current = (self.vlc_player.get_time() or 0) + self.last_start_time_ms
-        return current, total
+        if not self.playlist[self.src]:
+            return 0, 0
+        track = self.playlist[self.src][self.playlist_idx[self.src]]
+        return self.time_ms, int(track.duration_secs * 1000)
 
     def update_viz(self, reset: bool = False):
         if reset or not self.viz:
@@ -379,12 +370,10 @@ class Player(App):
         self.change_track(self.playlist_idx[self.src] - 1)
 
     def action_volume_down(self) -> None:
-        vol = max(0, self.vlc_player.audio_get_volume() - 5)
-        self.vlc_player.audio_set_volume(vol)
+        self.volume = max(0, self.volume - 5)
 
     def action_volume_up(self) -> None:
-        vol = min(100, self.vlc_player.audio_get_volume() + 5)
-        self.vlc_player.audio_set_volume(vol)
+        self.volume = min(100, self.volume + 5)
 
     def action_seek_backward(self) -> None:
         self.seek_relative(delta_s=-10)
