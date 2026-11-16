@@ -3,6 +3,7 @@ from random import shuffle
 from typing import Generator, Literal
 
 import vlc
+from rich.markup import escape
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -43,7 +44,7 @@ class PlayerView(Widget):
                 lines.append("")
                 continue
             track = self.player.playlist[self.player.src][i]
-            title_str = f"[{YELLOW}]{i + 1}[/{YELLOW}] {fmt_track(track)}"
+            title_str = f"[{YELLOW}]{i + 1}[/{YELLOW}] {escape(fmt_track(track))}"
             if i == self.player.playlist_idx[self.player.src]:
                 title_str = f"[bold]{title_str}[/bold]"
             else:
